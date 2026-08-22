@@ -6,11 +6,13 @@ const clientOrigins = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const secureCookies = process.env.BETTER_AUTH_URL?.startsWith("https://") ?? false;
 
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
   secret: process.env.BETTER_AUTH_SECRET,
   basePath: "/api/auth",
+  trustedOrigins: clientOrigins,
 
   database: prismaAdapter(prisma, {
     provider: "mongodb",
@@ -24,6 +26,11 @@ export const auth = betterAuth({
     database: {
       generateId: false,
     },
+    useSecureCookies: secureCookies,
+    defaultCookieAttributes: {
+      sameSite: secureCookies ? "none" : "lax",
+      secure: secureCookies,
+    },
   },
 
   emailAndPassword: {
@@ -31,10 +38,6 @@ export const auth = betterAuth({
     minPasswordLength: 8,
     autoSignIn: true,
   },
-
-  // The Next.js app (a different port = different origin) is allowed to
-  // call these auth routes with credentials (cookies) attached.
-  trustedOrigins: clientOrigins,
 
   user: {
     additionalFields: {
