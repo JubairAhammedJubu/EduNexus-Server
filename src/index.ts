@@ -13,26 +13,15 @@ const allowedOrigins = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
   .filter(Boolean);
 
 app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, Postman, or server-to-server)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true, // required so the browser sends/receives the session cookie
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Cookie", "X-Requested-With", "Accept"],
-  })
+  cors({origin: allowedOrigins, credentials: true})
+  
 );
 
 // Better Auth reads the raw request body itself, so its routes must be
 // mounted BEFORE express.json() global middleware runs on them.
+app.use(express.json());
 app.use("/api/auth", authRoutes);
 
-app.use(express.json());
 
 app.use("/api", userRoutes);
 
