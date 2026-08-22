@@ -35,16 +35,27 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-const PORT = Number(process.env.PORT) || 5000;
-
-app.listen(PORT, async () => {
-  console.log(`\n EduNexus Server running on http://localhost:${PORT}`);
-  try {
-    await prisma.$connect();
-    console.log("🟢 DATABASE CONNECTED SUCCESSFULLY! (MongoDB)");
-    console.log("⚡ API Ready at http://localhost:" + PORT);
-  } catch (error) {
-    console.error("❌ Database connection failed:", error);
-  }
+app.get("/", (_req, res) => {
+  res.json({
+    message: "EduNexus Server API is running 🚀",
+    health: "/health",
+  });
 });
+
+if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+  const PORT = Number(process.env.PORT) || 5000;
+  app.listen(PORT, async () => {
+    console.log(`\n EduNexus Server running on http://localhost:${PORT}`);
+    try {
+      await prisma.$connect();
+      console.log("🟢 DATABASE CONNECTED SUCCESSFULLY! (MongoDB)");
+      console.log("⚡ API Ready at http://localhost:" + PORT);
+    } catch (error) {
+      console.error("❌ Database connection failed:", error);
+    }
+  });
+}
+
+export default app;
+
 
