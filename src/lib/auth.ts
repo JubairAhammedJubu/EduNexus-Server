@@ -2,12 +2,12 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { prisma } from "./prisma.js";
 
-const clientOrigins = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
+const clientOrigins = (process.env.CLIENT_ORIGIN || "http://localhost:3000")
   .split(",")
   .map((origin) => origin.trim());
 
 export const auth = betterAuth({
-  baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:5000",
+  baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
   secret: process.env.BETTER_AUTH_SECRET,
   basePath: "/api/auth",
 
