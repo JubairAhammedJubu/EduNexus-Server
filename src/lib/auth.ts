@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { bearer } from "better-auth/plugins";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { prisma } from "./prisma.js";
 
@@ -16,6 +17,10 @@ export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET,
   basePath: "/api/auth",
   trustedOrigins: clientOrigins,
+
+  plugins: [
+    bearer(),
+  ],
 
   database: prismaAdapter(prisma, {
     provider: "mongodb",
