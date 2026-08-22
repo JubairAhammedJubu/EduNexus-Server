@@ -39,21 +39,6 @@ export const auth = betterAuth({
     autoSignIn: true,
   },
 
-  advanced: {
-  database: { generateId: false },
-  crossSubDomainCookies: {
-    enabled: true,
-    domain: ".vercel.app",
-  },
-  defaultCookieAttributes: {
-    sameSite: "none",
-    secure: true,
-  },
-},
-  // The Next.js app (a different port = different origin) is allowed to
-  // call these auth routes with credentials (cookies) attached.
-  trustedOrigins: clientOrigins,
-
   user: {
     additionalFields: {
       role: {
