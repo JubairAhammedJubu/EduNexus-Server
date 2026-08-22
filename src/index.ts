@@ -7,10 +7,15 @@ import { prisma } from "./lib/prisma.js";
 
 const app = express();
 
-const allowedOrigins = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+// Required behind Cloud Reverse Proxies (Render, Railway, Fly.io, Vercel)
+app.set("trust proxy", 1);
+
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "https://school-management-system-psi-ten.vercel.app",
+  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
+].filter(Boolean);
 
 app.use(
   cors({origin: allowedOrigins, credentials: true})
