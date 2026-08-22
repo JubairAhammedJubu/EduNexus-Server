@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
+import { prisma } from "./lib/prisma.js";
 
 const app = express();
 
@@ -25,12 +26,25 @@ app.use(express.json());
 
 app.use("/api", userRoutes);
 
-app.get("/health", (_req, res) => {
-  res.json({ status: "ok" });
+app.get("/health", async (_req, res) => {
+  try {
+    await prisma.$connect();
+    res.json({ status: "ok", database: "connected" });
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error?.message ?? "Database connection failed" });
+  }
 });
 
 const PORT = Number(process.env.PORT) || 5000;
 
-app.listen(PORT, () => {
-  console.log(`EduNexus API listening on http://localhost:${PORT}`);
+app.listen(PORT, async () => {
+  console.log(`\n EduNexus Server running on http://localhost:${PORT}`);
+  try {
+    await prisma.$connect();
+    console.log("🟢 DATABASE CONNECTED SUCCESSFULLY! (MongoDB)");
+    console.log("⚡ API Ready at http://localhost:" + PORT);
+  } catch (error) {
+    console.error("❌ Database connection failed:", error);
+  }
 });
+
