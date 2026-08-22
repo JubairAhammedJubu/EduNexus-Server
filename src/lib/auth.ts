@@ -2,9 +2,12 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { prisma } from "./prisma.js";
 
-const clientOrigins = (process.env.CLIENT_ORIGIN || "http://localhost:3000")
-  .split(",")
-  .map((origin) => origin.trim());
+const clientOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "https://school-management-system-psi-ten.vercel.app",
+  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
+].filter(Boolean);
 
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
