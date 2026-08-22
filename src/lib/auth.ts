@@ -24,13 +24,9 @@ export const auth = betterAuth({
   // `@default(auto())` in schema.prisma instead.
   advanced: {
     database: { generateId: false },
-    crossSubDomainCookies: {
-      enabled: true,
-      domain: ".vercel.app",
-    },
     defaultCookieAttributes: {
-      sameSite: "none",
-      secure: true,
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      secure: process.env.NODE_ENV === "production",
     },
     useSecureCookies: secureCookies,
     defaultCookieAttributes: {
@@ -44,6 +40,9 @@ export const auth = betterAuth({
     minPasswordLength: 8,
     autoSignIn: true,
   },
+  // The Next.js app (a different port = different origin) is allowed to
+  // call these auth routes with credentials (cookies) attached.
+  trustedOrigins: clientOrigins,
 
   user: {
     additionalFields: {
