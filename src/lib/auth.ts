@@ -2,17 +2,17 @@ import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { prisma } from "./prisma.js";
 
-const clientOrigins = [
-  "http://localhost:3000",
-  "http://localhost:5000",
-  "https://school-management-system-psi-ten.vercel.app",
-  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
-].filter(Boolean);
+const clientOrigins = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const secureCookies = process.env.BETTER_AUTH_URL?.startsWith("https://") ?? false;
 
 export const auth = betterAuth({
-  baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:5000",
+  baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
   secret: process.env.BETTER_AUTH_SECRET,
   basePath: "/api/auth",
+  trustedOrigins: clientOrigins,
 
   database: prismaAdapter(prisma, {
     provider: "mongodb",
@@ -27,6 +27,11 @@ export const auth = betterAuth({
     defaultCookieAttributes: {
       sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       secure: process.env.NODE_ENV === "production",
+    },
+    useSecureCookies: secureCookies,
+    defaultCookieAttributes: {
+      sameSite: secureCookies ? "none" : "lax",
+      secure: secureCookies,
     },
   },
 
