@@ -23,8 +23,14 @@ export const auth = betterAuth({
   // "_id" for every model (User, Session, Account, Verification) via
   // `@default(auto())` in schema.prisma instead.
   advanced: {
-    database: {
-      generateId: false,
+    database: { generateId: false },
+    crossSubDomainCookies: {
+      enabled: true,
+      domain: ".vercel.app",
+    },
+    defaultCookieAttributes: {
+      sameSite: "none",
+      secure: true,
     },
   },
 
