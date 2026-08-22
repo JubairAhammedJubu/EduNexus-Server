@@ -7,20 +7,25 @@ import { prisma } from "./lib/prisma.js";
 
 const app = express();
 
-const allowedOrigins = (process.env.CLIENT_ORIGIN ?? "http://localhost:3000")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+// Required behind Cloud Reverse Proxies (Render, Railway, Fly.io, Vercel)
+app.set("trust proxy", 1);
+
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "https://school-management-system-psi-ten.vercel.app",
+  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
+].filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests with no origin (like mobile apps, Postman, or server-to-server)
       if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
+      if (allowedOrigins.includes(origin) || origin.endsWith(".vercel.app")) {
         return callback(null, true);
       }
-      return callback(new Error("Not allowed by CORS"));
+      return callback(null, true);
     },
     credentials: true, // required so the browser sends/receives the session cookie
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],

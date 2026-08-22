@@ -9,7 +9,7 @@ const clientOrigins = [
   ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
 ].filter(Boolean);
 
-const secureCookies = process.env.NODE_ENV === "production" || (process.env.BETTER_AUTH_URL?.startsWith("https://") ?? false);
+const isProduction = process.env.NODE_ENV === "production" || (process.env.BETTER_AUTH_URL?.startsWith("https://") ?? false);
 
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
@@ -27,10 +27,10 @@ export const auth = betterAuth({
   // `@default(auto())` in schema.prisma instead.
   advanced: {
     database: { generateId: false },
-    useSecureCookies: secureCookies,
+    useSecureCookies: isProduction,
     defaultCookieAttributes: {
-      sameSite: secureCookies ? "none" : "lax",
-      secure: secureCookies,
+      sameSite: isProduction ? "none" : "lax",
+      secure: isProduction,
     },
   },
 
