@@ -41,7 +41,7 @@ app.get("/health", async (_req, res) => {
 
 app.get("/", (_req, res) => {
   res.json({
-    message: "EduNexus Server API is running 🚀",
+    message: "EduNexus Server API is Running 🚀",
     health: "/health",
   });
 });
