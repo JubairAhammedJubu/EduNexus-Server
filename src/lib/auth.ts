@@ -7,10 +7,7 @@ import {prisma} from "./prisma.js";
 const clientOrigins = [
   "http://localhost:3000",
   "http://localhost:5000",
-  "https://school-management-system-psi-ten.vercel.app",
-  ...(process.env.CLIENT_ORIGIN
-    ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim())
-    : []),
+  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
 ].filter(Boolean);
 
 const isProduction =
