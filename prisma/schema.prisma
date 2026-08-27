@@ -18,6 +18,10 @@ model User {
   email         String    @unique
   emailVerified Boolean   @default(false)
   image         String?
+  phone         String?
+  location      String?
+  department    String?
+  bio           String?
   role          String    @default("student") // "admin" | "teacher" | "student"
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
