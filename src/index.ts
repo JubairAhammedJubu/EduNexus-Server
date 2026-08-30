@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import authRoutes from "./routes/auth.routes.js";
 import userRoutes from "./routes/user.routes.js";
+import noticeRoutes from "./routes/notice.routes.js";
 import {prisma} from "./lib/prisma.js";
 
 const app = express();
@@ -27,6 +28,8 @@ app.use("/api/auth", authRoutes);
 app.use(express.json());
 
 app.use("/api", userRoutes);
+app.use("/api", noticeRoutes);
+
 
 app.get("/health", async (_req, res) => {
   try {
