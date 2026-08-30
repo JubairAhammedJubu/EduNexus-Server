@@ -37,7 +37,6 @@ model Notice {
   id          String   @id @default(auto()) @map("_id") @db.ObjectId
   teacherName String?  @default("Teacher")
   title       String
-  description String?
   detail      String
   category    String   @default("General")
   isPinned    Boolean  @default(false)
