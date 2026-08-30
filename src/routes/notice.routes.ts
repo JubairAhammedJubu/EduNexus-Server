@@ -45,7 +45,7 @@ router.get("/notices", async (_req, res) => {
 /**
  * POST /api/notices
  * Creates a new notice in the database.
- * Accepts: teacherName, publishedBy, authorEmail, title, description, detail, category, isPinned, createdAt
+ * Accepts: teacherName, publishedBy, authorEmail, title, detail, category, isPinned, createdAt
  */
 router.post("/notices", async (req, res) => {
   try {
@@ -61,18 +61,15 @@ router.post("/notices", async (req, res) => {
       publishedBy,
       authorEmail,
       title,
-      description,
       detail,
       category,
       isPinned,
       createdAt,
     } = req.body;
 
-    const noticeDetail = (detail || description || "").trim();
-
-    if (!title?.trim() || !noticeDetail) {
+    if (!title?.trim() || !detail?.trim()) {
       return res.status(400).json({
-        error: "Title and notice detail/description are required.",
+        error: "Title and notice detail are required.",
       });
     }
 
@@ -84,8 +81,7 @@ router.post("/notices", async (req, res) => {
     const newNotice = await prisma.notice.create({
       data: {
         title: title.trim(),
-        description: (description || noticeDetail).trim(),
-        detail: noticeDetail,
+        detail: detail.trim(),
         category: category?.trim() || "General",
         isPinned: Boolean(isPinned),
         teacherName: nameOfTeacher,
@@ -160,21 +156,17 @@ router.put("/notices/:id", async (req, res) => {
 
     const {
       title,
-      description,
       detail,
       category,
       isPinned,
       teacherName,
     } = req.body;
 
-    const noticeDetail = (detail || description || existingNotice.detail).trim();
-
     const updatedNotice = await prisma.notice.update({
       where: { id },
       data: {
         ...(title !== undefined && { title: title.trim() }),
-        ...(description !== undefined && { description: description.trim() }),
-        ...(detail !== undefined && { detail: noticeDetail }),
+        ...(detail !== undefined && { detail: detail.trim() }),
         ...(category !== undefined && { category: category.trim() }),
         ...(isPinned !== undefined && { isPinned: Boolean(isPinned) }),
         ...(teacherName !== undefined && { teacherName: teacherName.trim() }),
