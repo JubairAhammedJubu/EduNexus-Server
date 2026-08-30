@@ -45,7 +45,7 @@ router.get("/notices", async (_req, res) => {
 /**
  * POST /api/notices
  * Creates a new notice in the database.
- * Accepts: publishedBy, title, description, detail, category, isPinned, createdAt
+ * Accepts: teacherName, publishedBy, authorEmail, title, description, detail, category, isPinned, createdAt
  */
 router.post("/notices", async (req, res) => {
   try {
@@ -92,8 +92,6 @@ router.post("/notices", async (req, res) => {
         authorEmail: emailOfAuthor,
         ...(createdAt ? { createdAt: new Date(createdAt) } : {}),
       },
-
-
       include: {
         author: {
           select: {
@@ -116,6 +114,150 @@ router.post("/notices", async (req, res) => {
     console.error("Error publishing notice:", error);
     return res.status(500).json({
       error: error?.message || "Failed to publish notice",
+    });
+  }
+});
+
+/**
+ * PUT /api/notices/:id
+ * Updates an existing notice.
+ * Security: Admins can update any notice. Teachers can update only their own notices.
+ */
+router.put("/notices/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Session extraction
+    const sessionResult = await auth.api.getSession({
+      headers: fromNodeHeaders(req.headers),
+    });
+    const user = sessionResult?.user;
+
+    if (!user) {
+      return res.status(401).json({ error: "Unauthorized: Authentication required." });
+    }
+
+    const existingNotice = await prisma.notice.findUnique({
+      where: { id },
+    });
+
+    if (!existingNotice) {
+      return res.status(404).json({ error: "Notice not found." });
+    }
+
+    // Ownership & Role Verification
+    const isAdmin = (user as { role?: string }).role === "admin";
+    const isAuthor = Boolean(
+      (user.email && existingNotice.authorEmail === user.email) ||
+      (user.name && existingNotice.teacherName === user.name)
+    );
+
+    if (!isAdmin && !isAuthor) {
+      return res.status(403).json({
+        error: "Forbidden: You do not have permission to edit this notice.",
+      });
+    }
+
+    const {
+      title,
+      description,
+      detail,
+      category,
+      isPinned,
+      teacherName,
+    } = req.body;
+
+    const noticeDetail = (detail || description || existingNotice.detail).trim();
+
+    const updatedNotice = await prisma.notice.update({
+      where: { id },
+      data: {
+        ...(title !== undefined && { title: title.trim() }),
+        ...(description !== undefined && { description: description.trim() }),
+        ...(detail !== undefined && { detail: noticeDetail }),
+        ...(category !== undefined && { category: category.trim() }),
+        ...(isPinned !== undefined && { isPinned: Boolean(isPinned) }),
+        ...(teacherName !== undefined && { teacherName: teacherName.trim() }),
+      },
+      include: {
+        author: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            image: true,
+            role: true,
+          },
+        },
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: "Notice updated successfully",
+      notice: updatedNotice,
+    });
+  } catch (error: any) {
+    console.error("Error updating notice:", error);
+    return res.status(500).json({
+      error: error?.message || "Failed to update notice",
+    });
+  }
+});
+
+/**
+ * DELETE /api/notices/:id
+ * Deletes a notice.
+ * Security: Admins can delete any notice. Teachers can delete only their own notices.
+ */
+router.delete("/notices/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Session extraction
+    const sessionResult = await auth.api.getSession({
+      headers: fromNodeHeaders(req.headers),
+    });
+    const user = sessionResult?.user;
+
+    if (!user) {
+      return res.status(401).json({ error: "Unauthorized: Authentication required." });
+    }
+
+    const existingNotice = await prisma.notice.findUnique({
+      where: { id },
+    });
+
+    if (!existingNotice) {
+      return res.status(404).json({ error: "Notice not found." });
+    }
+
+    // Ownership & Role Verification
+    const isAdmin = (user as { role?: string }).role === "admin";
+    const isAuthor = Boolean(
+      (user.email && existingNotice.authorEmail === user.email) ||
+      (user.name && existingNotice.teacherName === user.name)
+    );
+
+    if (!isAdmin && !isAuthor) {
+      return res.status(403).json({
+        error: "Forbidden: You do not have permission to delete this notice.",
+      });
+    }
+
+    await prisma.notice.delete({
+      where: { id },
+    });
+
+    return res.json({
+      success: true,
+      message: "Notice deleted successfully",
+      id,
+    });
+  } catch (error: any) {
+    console.error("Error deleting notice:", error);
+    return res.status(500).json({
+      error: error?.message || "Failed to delete notice",
     });
   }
 });
