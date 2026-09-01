@@ -33,7 +33,7 @@ app.use("/api", userRoutes);
 app.use("/api", noticeRoutes);
 app.use("/api", requestRoutes);
 app.use("/api", assignmentRoutes);
-
+//COMMENT
 app.get("/health", async (_req, res) => {
   try {
     await prisma.$connect();
