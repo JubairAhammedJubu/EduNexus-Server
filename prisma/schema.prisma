@@ -116,3 +116,32 @@ model ClassSubjectRequest {
 
   @@map("class_subject_requests")
 }
+model Assignment {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  title       String
+  description String?
+
+  subject     String
+  grade       String
+  section     String
+
+  dueDate     DateTime
+
+  totalMarks  Int      @default(100)
+
+  status      String   @default("ACTIVE")
+  // "ACTIVE" | "DRAFT" | "CLOSED"
+
+  teacherEmail String
+  teacherName  String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([teacherEmail])
+  @@index([status])
+  @@index([dueDate])
+
+  @@map("assignments")
+}
