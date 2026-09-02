@@ -8,7 +8,8 @@ import {prisma} from "./prisma.js";
 // Kew 3 bar bhul password dile, tar account 5 ghontar jonno login
 // kora theke lock hoye jabe.
 const MAX_FAILED_LOGIN_ATTEMPTS = 3;
-const LOCKOUT_DURATION_MS = 5 * 60 * 60 * 1000; // 5 hours
+const LOCKOUT_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
+
 
 function formatRemainingLockTime(lockedUntil: Date): string {
   const msLeft = lockedUntil.getTime() - Date.now();
