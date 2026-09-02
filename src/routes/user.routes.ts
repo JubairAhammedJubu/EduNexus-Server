@@ -16,12 +16,33 @@ router.get("/admin/overview", requireAuth, requireRole("admin"), (req, res) => {
 
 /**
  * PUT /api/user/profile
- * Updates full profile information (name, image, phone, location, department, bio)
- * without requiring session cookies or requireAuth middleware.
+ * Updates full profile information (name, image, phone, location, department,
+ * bio, and the extended details collected in the post-registration step:
+ * father/mother name, date of birth, address, blood group, and the
+ * role-specific fields — schoolName/studentClass for students,
+ * qualification for teachers) without requiring session cookies or
+ * requireAuth middleware.
  */
 router.put("/user/profile", async (req, res) => {
   try {
-    const { email, userId, name, image, phone, location, department, bio } = req.body;
+    const {
+      email,
+      userId,
+      name,
+      image,
+      phone,
+      location,
+      department,
+      bio,
+      fatherName,
+      motherName,
+      dateOfBirth,
+      address,
+      bloodGroup,
+      schoolName,
+      studentClass,
+      qualification,
+    } = req.body;
 
     const targetUserId = userId || req.user?.id;
 
@@ -44,6 +65,20 @@ router.put("/user/profile", async (req, res) => {
         ...(location !== undefined && { location: location.trim() }),
         ...(department !== undefined && { department: department.trim() }),
         ...(bio !== undefined && { bio: bio.trim() }),
+        ...(fatherName !== undefined && { fatherName: fatherName.trim() }),
+        ...(motherName !== undefined && { motherName: motherName.trim() }),
+        ...(dateOfBirth !== undefined && {
+          dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+        }),
+        ...(address !== undefined && { address: address.trim() }),
+        ...(bloodGroup !== undefined && { bloodGroup: bloodGroup.trim() }),
+        ...(schoolName !== undefined && { schoolName: schoolName.trim() }),
+        ...(studentClass !== undefined && {
+          studentClass: studentClass.trim(),
+        }),
+        ...(qualification !== undefined && {
+          qualification: qualification.trim(),
+        }),
       },
     });
 

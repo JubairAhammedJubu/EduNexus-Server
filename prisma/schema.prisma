@@ -23,6 +23,19 @@ model User {
   department    String?
   bio           String?
   role          String    @default("student") // "admin" | "teacher" | "student"
+
+  // ── Extended profile info (collected in the post-registration step) ──
+  fatherName    String?
+  motherName    String?
+  dateOfBirth   DateTime?
+  address       String?
+  bloodGroup    String?
+  // student-only
+  schoolName    String?
+  studentClass  String?
+  // teacher-only
+  qualification String?
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
