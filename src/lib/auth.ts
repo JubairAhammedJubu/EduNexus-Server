@@ -1,8 +1,24 @@
 import {betterAuth} from "better-auth";
 import {bearer} from "better-auth/plugins";
 import {prismaAdapter} from "better-auth/adapters/prisma";
-import {APIError} from "better-auth/api";
+import {APIError, createAuthMiddleware} from "better-auth/api";
 import {prisma} from "./prisma.js";
+
+// ── Login lockout policy ───────────────────────────────────────────
+// Kew 3 bar bhul password dile, tar account 5 ghontar jonno login
+// kora theke lock hoye jabe.
+const MAX_FAILED_LOGIN_ATTEMPTS = 3;
+const LOCKOUT_DURATION_MS = 5 * 60 * 60 * 1000; // 5 hours
+
+function formatRemainingLockTime(lockedUntil: Date): string {
+  const msLeft = lockedUntil.getTime() - Date.now();
+  const minutesLeft = Math.max(1, Math.ceil(msLeft / 60000));
+  if (minutesLeft < 60) {
+    return `${minutesLeft} minute${minutesLeft === 1 ? "" : "s"}`;
+  }
+  const hoursLeft = Math.ceil(minutesLeft / 60);
+  return `${hoursLeft} hour${hoursLeft === 1 ? "" : "s"}`;
+}
 
 const clientOrigins = [
   "http://localhost:3000",
@@ -87,6 +103,84 @@ export const auth = betterAuth({
   session: {
     expiresIn: 60 * 60 * 24 * 7,
     updateAge: 60 * 60 * 24,
+  },
+
+  hooks: {
+    // Sign-in shuru howar age check kori account lock kina.
+    before: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== "/sign-in/email") return;
+
+      const email = (ctx.body?.email as string | undefined)?.toLowerCase().trim();
+      if (!email) return;
+
+      const user = await prisma.user.findUnique({
+        where: {email},
+        select: {lockedUntil: true},
+      });
+
+      if (user?.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
+        throw new APIError("FORBIDDEN", {
+          message: `Onek bar bhul password deyar karone apnar account temporarily lock kora hoyeche. Doya kore ${formatRemainingLockTime(
+            user.lockedUntil,
+          )} por abar try korun.`,
+          code: "ACCOUNT_LOCKED",
+          // Frontend eta diye countdown dekhabe (ISO timestamp).
+          lockedUntil: user.lockedUntil.toISOString(),
+        });
+      }
+    }),
+
+    // Sign-in process shesh howar por result dekhe decide kori attempt
+    // count barabo naki reset korbo.
+    after: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== "/sign-in/email") return;
+
+      const email = (ctx.body?.email as string | undefined)?.toLowerCase().trim();
+      if (!email) return;
+
+      const returned = ctx.context.returned;
+      const signInFailed = returned instanceof APIError;
+
+      const user = await prisma.user.findUnique({
+        where: {email},
+        select: {failedLoginAttempts: true, lockedUntil: true},
+      });
+      if (!user) return;
+
+      if (signInFailed) {
+        const attempts = user.failedLoginAttempts + 1;
+
+        if (attempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
+          const lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
+          await prisma.user.update({
+            where: {email},
+            data: {failedLoginAttempts: 0, lockedUntil},
+          });
+
+          // Just-now-locked hoyeche — eibar-i "wrong password" er bodole
+          // "account locked" message + lockedUntil pathai, jate frontend
+          // shathe shathe countdown shuru korte pare.
+          throw new APIError("FORBIDDEN", {
+            message: `Apni ${MAX_FAILED_LOGIN_ATTEMPTS} bar bhul password diyechen. Nirapottar jonno apnar account ${formatRemainingLockTime(
+              lockedUntil,
+            )} er jonno lock kora holo.`,
+            code: "ACCOUNT_LOCKED",
+            lockedUntil: lockedUntil.toISOString(),
+          });
+        }
+
+        await prisma.user.update({
+          where: {email},
+          data: {failedLoginAttempts: attempts},
+        });
+      } else if (user.failedLoginAttempts > 0 || user.lockedUntil) {
+        // Successful login — purono kono bhul attempt / lock thakle clear kore dei.
+        await prisma.user.update({
+          where: {email},
+          data: {failedLoginAttempts: 0, lockedUntil: null},
+        });
+      }
+    }),
   },
 });
 
