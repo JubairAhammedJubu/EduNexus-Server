@@ -24,6 +24,10 @@ model User {
   bio           String?
   role          String    @default("student") // "admin" | "teacher" | "student"
 
+  // ── Login lockout tracking (3 bhul password dile 5 ghonta lock) ──
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
   // ── Extended profile info (collected in the post-registration step) ──
   fatherName    String?
   motherName    String?
