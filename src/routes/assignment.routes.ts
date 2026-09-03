@@ -1,7 +1,65 @@
 import { Router } from "express";
+import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
 
 const router = Router();
+
+/**
+ * GET /api/student/assignments
+ *
+ * Returns active assignments for the authenticated student's class and
+ * section. Class and section are read from the student's profile, not from
+ * query parameters.
+ */
+router.get(
+  "/student/assignments",
+  requireAuth,
+  requireRole("student"),
+  async (req, res) => {
+    try {
+      console.log("Student info:", req.user,)
+      const student = await prisma.user.findUnique({
+        where: { id: req.user!.id},
+        select: {
+          studentClass: true,
+          studentSection: true,
+        },
+      }
+      )
+
+      if (!student?.studentClass) {
+        return res.status(400).json({
+          success: false,
+          error: "Student class and section are required to fetch assignments.",
+        });
+      }
+
+      const assignments = await prisma.assignment.findMany({
+        where: {
+          grade: student.studentClass,
+          
+          status: "ACTIVE",
+        },
+        orderBy: {
+          dueDate: "asc",
+        },
+      });
+
+      return res.json({
+        success: true,
+        count: assignments.length,
+        assignments,
+      });
+    } catch (error: any) {
+      console.error("Error fetching student assignments:", error);
+
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to fetch student assignments",
+      });
+    }
+  },
+);
 
 /**
  * GET /api/teacher/assignments
@@ -65,14 +123,7 @@ router.post("/teacher/assignments", async (req, res) => {
     } = req.body;
 
     // Required fields
-    if (
-      !title ||
-      !subject ||
-      !grade ||
-      !section ||
-      !dueDate ||
-      !teacherEmail
-    ) {
+    if (!title || !subject || !grade || !section || !dueDate || !teacherEmail) {
       return res.status(400).json({
         success: false,
         error:
@@ -131,14 +182,7 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
       status,
     } = req.body;
 
-    if (
-      !title ||
-      !subject ||
-      !grade ||
-      !section ||
-      !dueDate ||
-      !teacherEmail
-    ) {
+    if (!title || !subject || !grade || !section || !dueDate || !teacherEmail) {
       return res.status(400).json({
         success: false,
         error:
