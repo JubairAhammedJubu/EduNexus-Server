@@ -37,6 +37,7 @@ model User {
   // student-only
   schoolName    String?
   studentClass  String?
+  roll          String?
   // teacher-only
   qualification String?
 
