@@ -14,6 +14,42 @@ router.get("/admin/overview", requireAuth, requireRole("admin"), (req, res) => {
   res.json({ message: `Welcome, admin ${req.user?.name ?? ""}` });
 });
 
+// GET /api/students - authenticated users receive student records only.
+router.get("/students", async (_req, res) => {
+  try {
+    const students = await prisma.user.findMany({
+      where: { role: "student" },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        phone: true,
+        location: true,
+        department: true,
+        bio: true,
+        studentClass: true,
+        studentSection: true,
+        schoolName: true,
+        createdAt: true,
+      },
+      orderBy: { name: "asc" },
+    });
+
+    return res.json({
+      success: true,
+      count: students.length,
+      students,
+    });
+  } catch (error: any) {
+    console.error("Error fetching students:", error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to fetch students",
+    });
+  }
+});
+
 /**
  * PUT /api/user/profile
  * Updates full profile information (name, image, phone, location, department,
@@ -41,6 +77,7 @@ router.put("/user/profile", async (req, res) => {
       bloodGroup,
       schoolName,
       studentClass,
+      studentSection,
       qualification,
     } = req.body;
 
@@ -75,6 +112,9 @@ router.put("/user/profile", async (req, res) => {
         ...(schoolName !== undefined && { schoolName: schoolName.trim() }),
         ...(studentClass !== undefined && {
           studentClass: studentClass.trim(),
+        }),
+        ...(studentSection !== undefined && {
+          studentSection: studentSection.trim(),
         }),
         ...(qualification !== undefined && {
           qualification: qualification.trim(),
