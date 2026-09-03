@@ -18,15 +18,56 @@ model User {
   email         String    @unique
   emailVerified Boolean   @default(false)
   image         String?
+  phone         String?
+  location      String?
+  department    String?
+  bio           String?
   role          String    @default("student") // "admin" | "teacher" | "student"
+
+  // ── Login lockout tracking (3 bhul password dile 5 ghonta lock) ──
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
+  // ── Extended profile info (collected in the post-registration step) ──
+  fatherName    String?
+  motherName    String?
+  dateOfBirth   DateTime?
+  address       String?
+  bloodGroup    String?
+  // student-only
+  schoolName    String?
+  studentClass  String?
+  studentSection String?
+  roll          String?
+  // teacher-only
+  qualification String?
+
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   sessions Session[]
   accounts Account[]
+  notices  Notice[]
+  submissions Submission[]
 
   @@map("users")
 }
+
+model Notice {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  teacherName String?  @default("Teacher")
+  title       String
+  detail      String
+  category    String   @default("General")
+  isPinned    Boolean  @default(false)
+  authorEmail String?
+  author      User?    @relation(fields: [authorEmail], references: [email], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("notices")
+}
+
 
 model Session {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
@@ -73,4 +114,85 @@ model Verification {
   updatedAt  DateTime? @updatedAt
 
   @@map("verifications")
+}
+
+model ClassSubjectRequest {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  teacherEmail  String
+  teacherName   String
+  grade         String
+  section       String
+  subject       String
+  subjectCode   String
+  group         String?
+  room          String?
+  schedule      String?
+  time          String?
+  reason        String?
+  status        String   @default("PENDING") // "PENDING" | "APPROVED" | "REJECTED"
+  adminFeedback String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("class_subject_requests")
+}
+model Assignment {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  title       String
+  description String?
+
+  subject     String
+  grade       String
+  section     String
+
+  dueDate     DateTime
+
+  totalMarks  Int      @default(100)
+
+  status      String   @default("ACTIVE")
+  // "ACTIVE" | "DRAFT" | "CLOSED"
+
+  teacherEmail String
+  teacherName  String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Submissions relation (student submissions for this assignment)
+  submissions  Submission[]
+
+  @@index([teacherEmail])
+  @@index([status])
+  @@index([dueDate])
+
+  @@map("assignments")
+}
+
+model Submission {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  assignmentId String   @db.ObjectId
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  studentId    String   @db.ObjectId
+  student      User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  studentEmail String
+
+  content      String?
+  fileUrl      String?
+
+  marks        Int?
+  status       String   @default("SUBMITTED") // "SUBMITTED" | "GRADED" | "LATE"
+  feedback     String?
+
+  submittedAt  DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([assignmentId])
+  @@index([studentId])
+  @@unique([assignmentId, studentId])
+  @@map("submissions")
 }
