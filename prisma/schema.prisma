@@ -37,6 +37,7 @@ model User {
   // student-only
   schoolName    String?
   studentClass  String?
+  studentSection String?
   roll          String?
   // teacher-only
   qualification String?
@@ -47,6 +48,7 @@ model User {
   sessions Session[]
   accounts Account[]
   notices  Notice[]
+  submissions Submission[]
 
   @@map("users")
 }
@@ -157,9 +159,40 @@ model Assignment {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // Submissions relation (student submissions for this assignment)
+  submissions  Submission[]
+
   @@index([teacherEmail])
   @@index([status])
   @@index([dueDate])
 
   @@map("assignments")
+}
+
+model Submission {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  assignmentId String   @db.ObjectId
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  studentId    String   @db.ObjectId
+  student      User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  studentEmail String
+
+  content      String?
+  fileUrl      String?
+
+  marks        Int?
+  status       String   @default("SUBMITTED") // "SUBMITTED" | "GRADED" | "LATE"
+  feedback     String?
+
+  submittedAt  DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([assignmentId])
+  @@index([studentId])
+  @@unique([assignmentId, studentId])
+  @@map("submissions")
 }

@@ -66,6 +66,18 @@ export const auth = betterAuth({
         defaultValue: "student",
         input: false, // client theke role pathano jabe na
       },
+      phone:{
+        type: "string",
+        required: false,
+      },
+      location:{ 
+        type: "string",
+        required: false,
+      },
+      bio:{
+        type: "string",
+        required: false,
+      }
     },
   },
 
