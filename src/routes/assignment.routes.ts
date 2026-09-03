@@ -37,7 +37,7 @@ router.get(
       const assignments = await prisma.assignment.findMany({
         where: {
           grade: student.studentClass,
-          
+
           status: "ACTIVE",
         },
         orderBy: {
@@ -127,7 +127,7 @@ router.post("/teacher/assignments", async (req, res) => {
       return res.status(400).json({
         success: false,
         error:
-          "Title, subject, grade, section, due date, and teacher email are required.",
+          "Title, description, subject, grade, section, due date, and teacher email are required.",
       });
     }
 
@@ -186,7 +186,7 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
       return res.status(400).json({
         success: false,
         error:
-          "Title, subject, grade, section, due date, and teacher email are required.",
+          "Title, description, subject, grade, section, due date, and teacher email are required.",
       });
     }
 
