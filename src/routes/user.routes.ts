@@ -79,6 +79,7 @@ router.put("/user/profile", async (req, res) => {
       studentClass,
       studentSection,
       qualification,
+      roll,
     } = req.body;
 
     const targetUserId = userId || req.user?.id;
@@ -119,6 +120,7 @@ router.put("/user/profile", async (req, res) => {
         ...(qualification !== undefined && {
           qualification: qualification.trim(),
         }),
+        ...(roll !== undefined && { roll: roll.trim() }),
       },
     });
 
@@ -135,4 +137,85 @@ router.put("/user/profile", async (req, res) => {
   }
 });
 
+/**
+ * GET /api/teacher/students
+ * Fetches all users from the `users` collection where role is 'student'.
+ * Supports filtering by class name (`studentClass`), searching by student name (`name`) or roll number (`roll`),
+ * and pagination with 20 items per page by default.
+ */
+router.get("/teacher/students", async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit as string) || 20);
+    const search = (req.query.search as string || "").trim();
+    const studentClass = (req.query.studentClass as string || "").trim();
+
+    const where: any = {
+      role: "student",
+    };
+
+    if (studentClass && studentClass !== "All Classes") {
+      where.studentClass = {
+        contains: studentClass,
+        mode: "insensitive",
+      };
+    }
+
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: "insensitive" } },
+        { roll: { contains: search, mode: "insensitive" } },
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [totalCount, students] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+
+    // Query distinct student classes from DB to populate dropdown options
+    const distinctClasses = await prisma.user.findMany({
+      where: { role: "student", studentClass: { not: null } },
+      select: { studentClass: true },
+      distinct: ["studentClass"],
+    });
+
+    const defaultClasses = ["All Classes", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10"];
+    const classSet = new Set<string>(defaultClasses);
+    distinctClasses.forEach((c) => {
+      if (c.studentClass && c.studentClass.trim()) {
+        classSet.add(c.studentClass.trim());
+      }
+    });
+
+    const totalPages = Math.ceil(totalCount / limit) || 1;
+
+    return res.json({
+      success: true,
+      students,
+      pagination: {
+        total: totalCount,
+        page,
+        limit,
+        totalPages,
+      },
+      classes: Array.from(classSet),
+    });
+  } catch (error: any) {
+    console.error("Error fetching teacher students:", error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to fetch student list",
+    });
+  }
+});
+
 export default router;
+
