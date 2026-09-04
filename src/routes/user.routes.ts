@@ -19,7 +19,7 @@ router.get("/admin/overview", requireAuth, requireRole("admin"), (req, res) => {
  * Updates full profile information (name, image, phone, location, department,
  * bio, and the extended details collected in the post-registration step:
  * father/mother name, date of birth, address, blood group, and the
- * role-specific fields — schoolName/studentClass for students,
+ * role-specific fields — schoolName/studentClass/section for students,
  * qualification for teachers) without requiring session cookies or
  * requireAuth middleware.
  */
@@ -41,6 +41,7 @@ router.put("/user/profile", async (req, res) => {
       bloodGroup,
       schoolName,
       studentClass,
+      section,
       qualification,
       roll,
     } = req.body;
@@ -77,6 +78,7 @@ router.put("/user/profile", async (req, res) => {
         ...(studentClass !== undefined && {
           studentClass: studentClass.trim(),
         }),
+        ...(section !== undefined && { section: section.trim() }),
         ...(qualification !== undefined && {
           qualification: qualification.trim(),
         }),
@@ -178,4 +180,3 @@ router.get("/teacher/students", async (req, res) => {
 });
 
 export default router;
-
