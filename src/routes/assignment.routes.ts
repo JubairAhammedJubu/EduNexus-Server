@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { getMaxPdfSizeBytes, uploadPdfToR2 } from "../lib/r2.js";
 
 const router = Router();
+const teacherOnly = [requireAuth, requireRole("teacher", "admin")];
 const uploadPdf = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: getMaxPdfSizeBytes() },
@@ -47,7 +48,7 @@ router.get(
         },
       });
 
-      if (!student?.studentClass) {
+      if (!student?.studentClass || !student.studentSection) {
         return res.status(400).json({
           success: false,
           error: "Student class and section are required to fetch assignments.",
@@ -57,7 +58,7 @@ router.get(
       const assignments = await prisma.assignment.findMany({
         where: {
           grade: student.studentClass,
-
+          section: student.studentSection,
           status: "ACTIVE",
         },
         orderBy: {
@@ -116,13 +117,36 @@ router.post(
       const { id: assignmentId } = req.params;
       const assignment = await prisma.assignment.findUnique({
         where: { id: assignmentId },
-        select: { id: true, status: true, dueDate: true },
+        select: {
+          id: true,
+          grade: true,
+          section: true,
+          status: true,
+          dueDate: true,
+        },
       });
 
       if (!assignment) {
         return res.status(404).json({
           success: false,
           error: "Assignment not found.",
+        });
+      }
+
+      const student = await prisma.user.findUnique({
+        where: { id: req.user!.id },
+        select: { studentClass: true, studentSection: true },
+      });
+
+      if (
+        !student?.studentClass ||
+        !student.studentSection ||
+        assignment.grade !== student.studentClass ||
+        assignment.section !== student.studentSection
+      ) {
+        return res.status(403).json({
+          success: false,
+          error: "This assignment is not assigned to your section.",
         });
       }
 
@@ -328,15 +352,14 @@ router.post(
  * ?teacherEmail=teacher@example.com
  * ?status=ACTIVE
  */
-router.get("/teacher/assignments", async (req, res) => {
+router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
   try {
-    const { teacherEmail, status } = req.query;
+    const { status } = req.query;
 
-    const whereClause: any = {};
-
-    if (teacherEmail && typeof teacherEmail === "string") {
-      whereClause.teacherEmail = teacherEmail;
-    }
+    const whereClause: any =
+      (req.user as { role?: string }).role === "admin"
+        ? {}
+        : { teacherEmail: req.user!.email };
 
     if (status && typeof status === "string") {
       whereClause.status = status;
@@ -367,7 +390,7 @@ router.get("/teacher/assignments", async (req, res) => {
  *
  * Creates a new assignment.
  */
-router.post("/teacher/assignments", async (req, res) => {
+router.post("/teacher/assignments", ...teacherOnly, async (req, res) => {
   try {
     const {
       title,
@@ -377,17 +400,15 @@ router.post("/teacher/assignments", async (req, res) => {
       section,
       dueDate,
       totalMarks,
-      teacherEmail,
       teacherName,
       status,
     } = req.body;
 
     // Required fields
-    if (!title || !subject || !grade || !section || !dueDate || !teacherEmail) {
+    if (!title || !subject || !grade || !section || !dueDate) {
       return res.status(400).json({
         success: false,
-        error:
-          "Title, description, subject, grade, section, due date, and teacher email are required.",
+        error: "Title, subject, grade, section, and due date are required.",
       });
     }
 
@@ -400,8 +421,8 @@ router.post("/teacher/assignments", async (req, res) => {
         section: section.trim(),
         dueDate: new Date(dueDate),
         totalMarks: Number(totalMarks) || 100,
-        teacherEmail: teacherEmail.trim(),
-        teacherName: teacherName?.trim() || null,
+        teacherEmail: req.user!.email,
+        teacherName: req.user!.name || teacherName?.trim() || null,
         status: status || "ACTIVE",
       },
     });
@@ -425,7 +446,7 @@ router.post("/teacher/assignments", async (req, res) => {
  *
  * Updates an existing assignment.
  */
-router.patch("/teacher/assignments/:id", async (req, res) => {
+router.patch("/teacher/assignments/:id", ...teacherOnly, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -437,16 +458,14 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
       section,
       dueDate,
       totalMarks,
-      teacherEmail,
       teacherName,
       status,
     } = req.body;
 
-    if (!title || !subject || !grade || !section || !dueDate || !teacherEmail) {
+    if (!title || !subject || !grade || !section || !dueDate) {
       return res.status(400).json({
         success: false,
-        error:
-          "Title, description, subject, grade, section, due date, and teacher email are required.",
+        error: "Title, subject, grade, section, and due date are required.",
       });
     }
 
@@ -461,8 +480,8 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
       });
     }
 
-    // Prevent a teacher from editing another teacher's assignment.
-    if (existingAssignment.teacherEmail !== teacherEmail.trim()) {
+    const isAdmin = (req.user as { role?: string }).role === "admin";
+    if (!isAdmin && existingAssignment.teacherEmail !== req.user!.email) {
       return res.status(403).json({
         success: false,
         error: "You are not authorized to edit this assignment.",
@@ -479,7 +498,9 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
         section: section.trim(),
         dueDate: new Date(dueDate),
         totalMarks: Number(totalMarks) || 100,
-        teacherName: teacherName?.trim() || null,
+        teacherName: isAdmin
+          ? teacherName?.trim() || null
+          : req.user!.name || teacherName?.trim() || null,
         status: status || "ACTIVE",
       },
     });
@@ -503,10 +524,9 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
  *
  * Deletes an assignment.
  */
-router.delete("/teacher/assignments/:id", async (req, res) => {
+router.delete("/teacher/assignments/:id", ...teacherOnly, async (req, res) => {
   try {
     const { id } = req.params;
-    const { teacherEmail } = req.query;
 
     const existingAssignment = await prisma.assignment.findUnique({
       where: { id },
@@ -519,12 +539,8 @@ router.delete("/teacher/assignments/:id", async (req, res) => {
       });
     }
 
-    // If teacherEmail is provided, verify ownership.
-    if (
-      teacherEmail &&
-      typeof teacherEmail === "string" &&
-      existingAssignment.teacherEmail !== teacherEmail
-    ) {
+    const isAdmin = (req.user as { role?: string }).role === "admin";
+    if (!isAdmin && existingAssignment.teacherEmail !== req.user!.email) {
       return res.status(403).json({
         success: false,
         error: "You are not authorized to delete this assignment.",
