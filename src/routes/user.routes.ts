@@ -14,42 +14,6 @@ router.get("/admin/overview", requireAuth, requireRole("admin"), (req, res) => {
   res.json({ message: `Welcome, admin ${req.user?.name ?? ""}` });
 });
 
-// GET /api/students - authenticated users receive student records only.
-router.get("/students", async (_req, res) => {
-  try {
-    const students = await prisma.user.findMany({
-      where: { role: "student" },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        image: true,
-        phone: true,
-        location: true,
-        department: true,
-        bio: true,
-        studentClass: true,
-        studentSection: true,
-        schoolName: true,
-        createdAt: true,
-      },
-      orderBy: { name: "asc" },
-    });
-
-    return res.json({
-      success: true,
-      count: students.length,
-      students,
-    });
-  } catch (error: any) {
-    console.error("Error fetching students:", error);
-    return res.status(500).json({
-      success: false,
-      error: error?.message || "Failed to fetch students",
-    });
-  }
-});
-
 /**
  * PUT /api/user/profile
  * Updates full profile information (name, image, phone, location, department,
@@ -77,9 +41,7 @@ router.put("/user/profile", async (req, res) => {
       bloodGroup,
       schoolName,
       studentClass,
-      studentSection,
       qualification,
-      roll,
     } = req.body;
 
     const targetUserId = userId || req.user?.id;
@@ -114,13 +76,9 @@ router.put("/user/profile", async (req, res) => {
         ...(studentClass !== undefined && {
           studentClass: studentClass.trim(),
         }),
-        ...(studentSection !== undefined && {
-          studentSection: studentSection.trim(),
-        }),
         ...(qualification !== undefined && {
           qualification: qualification.trim(),
         }),
-        ...(roll !== undefined && { roll: roll.trim() }),
       },
     });
 
@@ -138,84 +96,91 @@ router.put("/user/profile", async (req, res) => {
 });
 
 /**
- * GET /api/teacher/students
- * Fetches all users from the `users` collection where role is 'student'.
- * Supports filtering by class name (`studentClass`), searching by student name (`name`) or roll number (`roll`),
- * and pagination with 20 items per page by default.
+ * GET /api/admin/user-2fa-status?email=...
+ * Admin-only lookup so the reset-2FA UI can show whether a user currently
+ * has an authenticator app enrolled before offering to reset it.
  */
-router.get("/teacher/students", async (req, res) => {
-  try {
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.max(1, parseInt(req.query.limit as string) || 20);
-    const search = (req.query.search as string || "").trim();
-    const studentClass = (req.query.studentClass as string || "").trim();
-
-    const where: any = {
-      role: "student",
-    };
-
-    if (studentClass && studentClass !== "All Classes") {
-      where.studentClass = {
-        contains: studentClass,
-        mode: "insensitive",
-      };
-    }
-
-    if (search) {
-      where.OR = [
-        { name: { contains: search, mode: "insensitive" } },
-        { roll: { contains: search, mode: "insensitive" } },
-      ];
-    }
-
-    const skip = (page - 1) * limit;
-
-    const [totalCount, students] = await Promise.all([
-      prisma.user.count({ where }),
-      prisma.user.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { createdAt: "desc" },
-      }),
-    ]);
-
-    // Query distinct student classes from DB to populate dropdown options
-    const distinctClasses = await prisma.user.findMany({
-      where: { role: "student", studentClass: { not: null } },
-      select: { studentClass: true },
-      distinct: ["studentClass"],
-    });
-
-    const defaultClasses = ["All Classes", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10"];
-    const classSet = new Set<string>(defaultClasses);
-    distinctClasses.forEach((c) => {
-      if (c.studentClass && c.studentClass.trim()) {
-        classSet.add(c.studentClass.trim());
+router.get(
+  "/admin/user-2fa-status",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const email = (req.query.email as string | undefined)?.toLowerCase().trim();
+      if (!email) {
+        return res.status(400).json({ error: "Email is required." });
       }
-    });
 
-    const totalPages = Math.ceil(totalCount / limit) || 1;
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true, name: true, email: true, twoFactorEnabled: true },
+      });
+      if (!user) {
+        return res.status(404).json({ error: "No account found with that email." });
+      }
 
-    return res.json({
-      success: true,
-      students,
-      pagination: {
-        total: totalCount,
-        page,
-        limit,
-        totalPages,
-      },
-      classes: Array.from(classSet),
-    });
-  } catch (error: any) {
-    console.error("Error fetching teacher students:", error);
-    return res.status(500).json({
-      success: false,
-      error: error?.message || "Failed to fetch student list",
-    });
-  }
-});
+      return res.json({
+        user: {
+          name: user.name,
+          email: user.email,
+          twoFactorEnabled: user.twoFactorEnabled,
+        },
+      });
+    } catch (error: any) {
+      console.error("Error looking up 2FA status:", error);
+      return res
+        .status(500)
+        .json({ error: error?.message || "Failed to look up 2FA status." });
+    }
+  },
+);
+
+/**
+ * POST /api/admin/reset-2fa
+ * Admin-only recovery path for a user who lost their authenticator app /
+ * QR code with no backup codes. We don't (and can't safely) hand back the
+ * old QR — instead this wipes the user's stored TOTP secret and flips
+ * `twoFactorEnabled` back to false. The existing login flow already shows
+ * a fresh QR-setup screen the next time a user with 2FA disabled signs in
+ * (see AuthPage.tsx), so no other change is needed — the user just logs
+ * in with their email + password and re-enrolls a new authenticator.
+ */
+router.post(
+  "/admin/reset-2fa",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const email = (req.body?.email as string | undefined)?.toLowerCase().trim();
+      if (!email) {
+        return res.status(400).json({ error: "Email is required." });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true, name: true, twoFactorEnabled: true },
+      });
+      if (!user) {
+        return res.status(404).json({ error: "No account found with that email." });
+      }
+
+      await prisma.twoFactor.deleteMany({ where: { userId: user.id } });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { twoFactorEnabled: false },
+      });
+
+      return res.json({
+        success: true,
+        message: `2FA reset for ${user.name}. They'll be prompted to set up a new authenticator on their next login.`,
+      });
+    } catch (error: any) {
+      console.error("Error resetting 2FA:", error);
+      return res
+        .status(500)
+        .json({ error: error?.message || "Failed to reset 2FA." });
+    }
+  },
+);
 
 export default router;
-
