@@ -28,6 +28,17 @@ model User {
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
 
+  // ── Two-factor authentication (authenticator app) ──
+  twoFactorEnabled Boolean @default(false)
+
+  // ── Admin approval gate ──
+  // Default true keeps every account that already existed before this
+  // field was added working exactly as before. Brand-new registrations
+  // are forced to `false` in the databaseHooks.user.create.before hook
+  // (see src/lib/auth.ts) — an admin has to approve them before they can
+  // log in.
+  isApproved Boolean @default(true)
+
   // ── Extended profile info (collected in the post-registration step) ──
   fatherName    String?
   motherName    String?
@@ -46,6 +57,7 @@ model User {
   sessions Session[]
   accounts Account[]
   notices  Notice[]
+  twoFactors TwoFactor[]
 
   @@map("users")
 }
@@ -111,6 +123,23 @@ model Verification {
   updatedAt  DateTime? @updatedAt
 
   @@map("verifications")
+}
+
+// Authenticator-app (TOTP) secrets + backup codes. Managed by Better Auth's
+// `twoFactor` plugin (see src/lib/auth.ts) — field names/shapes follow its
+// required schema exactly.
+model TwoFactor {
+  id                      String    @id @default(auto()) @map("_id") @db.ObjectId
+  secret                  String
+  backupCodes             String
+  verified                Boolean   @default(true)
+  failedVerificationCount Int       @default(0)
+  lockedUntil             DateTime?
+
+  userId String @db.ObjectId
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("two_factors")
 }
 
 model ClassSubjectRequest {

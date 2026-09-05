@@ -95,4 +95,92 @@ router.put("/user/profile", async (req, res) => {
   }
 });
 
+/**
+ * GET /api/admin/user-2fa-status?email=...
+ * Admin-only lookup so the reset-2FA UI can show whether a user currently
+ * has an authenticator app enrolled before offering to reset it.
+ */
+router.get(
+  "/admin/user-2fa-status",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const email = (req.query.email as string | undefined)?.toLowerCase().trim();
+      if (!email) {
+        return res.status(400).json({ error: "Email is required." });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true, name: true, email: true, twoFactorEnabled: true },
+      });
+      if (!user) {
+        return res.status(404).json({ error: "No account found with that email." });
+      }
+
+      return res.json({
+        user: {
+          name: user.name,
+          email: user.email,
+          twoFactorEnabled: user.twoFactorEnabled,
+        },
+      });
+    } catch (error: any) {
+      console.error("Error looking up 2FA status:", error);
+      return res
+        .status(500)
+        .json({ error: error?.message || "Failed to look up 2FA status." });
+    }
+  },
+);
+
+/**
+ * POST /api/admin/reset-2fa
+ * Admin-only recovery path for a user who lost their authenticator app /
+ * QR code with no backup codes. We don't (and can't safely) hand back the
+ * old QR — instead this wipes the user's stored TOTP secret and flips
+ * `twoFactorEnabled` back to false. The existing login flow already shows
+ * a fresh QR-setup screen the next time a user with 2FA disabled signs in
+ * (see AuthPage.tsx), so no other change is needed — the user just logs
+ * in with their email + password and re-enrolls a new authenticator.
+ */
+router.post(
+  "/admin/reset-2fa",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    try {
+      const email = (req.body?.email as string | undefined)?.toLowerCase().trim();
+      if (!email) {
+        return res.status(400).json({ error: "Email is required." });
+      }
+
+      const user = await prisma.user.findUnique({
+        where: { email },
+        select: { id: true, name: true, twoFactorEnabled: true },
+      });
+      if (!user) {
+        return res.status(404).json({ error: "No account found with that email." });
+      }
+
+      await prisma.twoFactor.deleteMany({ where: { userId: user.id } });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { twoFactorEnabled: false },
+      });
+
+      return res.json({
+        success: true,
+        message: `2FA reset for ${user.name}. They'll be prompted to set up a new authenticator on their next login.`,
+      });
+    } catch (error: any) {
+      console.error("Error resetting 2FA:", error);
+      return res
+        .status(500)
+        .json({ error: error?.message || "Failed to reset 2FA." });
+    }
+  },
+);
+
 export default router;
