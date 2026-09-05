@@ -182,6 +182,7 @@ model Submission {
 
   content      String?
   fileUrl      String?
+  attemptsUsed Int      @default(1)
 
   marks        Int?
   status       String   @default("SUBMITTED") // "SUBMITTED" | "GRADED" | "LATE"
