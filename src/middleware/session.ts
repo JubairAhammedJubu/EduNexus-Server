@@ -37,7 +37,7 @@ export async function requireAuth(
   });
 
   if (!result) {
-    return res.status(401).json({ error: "Not authenticated" });
+    return res.status(401).json({ status: false, code: 401, error: "Unauthorized" });
   }
 
   req.user = result.user;
@@ -54,7 +54,7 @@ export function requireRole(...allowedRoles: string[]) {
     const role = (req.user as { role?: string } | undefined)?.role;
 
     if (!role || !allowedRoles.includes(role)) {
-      return res.status(403).json({ error: "Forbidden" });
+      return res.status(403).json({ status: false, code: 403, error: "Forbidden" });
     }
 
     next();

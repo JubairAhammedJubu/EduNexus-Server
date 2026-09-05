@@ -13,17 +13,23 @@
     "prisma:push": "prisma db push"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1127.0",
     "@better-auth/prisma-adapter": "^1.7.1",
+    "@better-auth/utils": "^0.4.2",
     "@prisma/client": "^6.18.0",
+    "@types/nodemailer": "^8.0.1",
     "better-auth": "^1.7.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "mongodb": "^7.5.0"
+    "mongodb": "^7.5.0",
+    "multer": "^2.3.0",
+    "nodemailer": "^10.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
+    "@types/multer": "^2.2.0",
     "@types/node": "^20.14.9",
     "@vercel/node": "^5.1.18",
     "prisma": "^6.18.0",
