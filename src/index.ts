@@ -6,6 +6,8 @@ import userRoutes from "./routes/user.routes.js";
 import noticeRoutes from "./routes/notice.routes.js";
 import requestRoutes from "./routes/request.routes.js";
 import assignmentRoutes from "./routes/assignment.routes.js";
+import passwordResetRoutes from "./routes/password-reset.routes.js";
+import approvalRoutes from "./routes/approval.routes.js";
 import {prisma} from "./lib/prisma.js";
 
 const app = express();
@@ -33,6 +35,8 @@ app.use("/api", userRoutes);
 app.use("/api", noticeRoutes);
 app.use("/api", requestRoutes);
 app.use("/api", assignmentRoutes);
+app.use("/api", passwordResetRoutes);
+app.use("/api", approvalRoutes);
 
 app.get("/health", async (_req, res) => {
   try {
