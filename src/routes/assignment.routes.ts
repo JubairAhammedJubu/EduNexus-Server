@@ -1,8 +1,30 @@
 import { Router } from "express";
+import multer from "multer";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
+import { getMaxPdfSizeBytes, uploadPdfToR2 } from "../lib/r2.js";
 
 const router = Router();
+const uploadPdf = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: getMaxPdfSizeBytes() },
+});
+
+function handlePdfUpload(req: any, res: any, next: any) {
+  uploadPdf.single("file")(req, res, (error: any) => {
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error:
+          error.code === "LIMIT_FILE_SIZE"
+            ? "PDF must be 10 MB or smaller."
+            : "A PDF file is required.",
+      });
+    }
+
+    next();
+  });
+}
 
 /**
  * GET /api/student/assignments
@@ -17,15 +39,13 @@ router.get(
   requireRole("student"),
   async (req, res) => {
     try {
-      console.log("Student info:", req.user,)
       const student = await prisma.user.findUnique({
-        where: { id: req.user!.id},
+        where: { id: req.user!.id },
         select: {
           studentClass: true,
           studentSection: true,
         },
-      }
-      )
+      });
 
       if (!student?.studentClass) {
         return res.status(400).json({
@@ -62,7 +82,247 @@ router.get(
 );
 
 /**
- * GET /api/teacher/assignments
+ * POST /api/student/assignments/:id/upload
+ *
+ * Uploads one PDF to Cloudflare R2 and returns its public URL.
+ * Multipart field: file
+ */
+router.post(
+  "/student/assignments/:id/upload",
+  requireAuth,
+  requireRole("student"),
+  handlePdfUpload,
+  async (req, res) => {
+    try {
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: "A PDF file is required in the 'file' field.",
+        });
+      }
+
+      if (
+        file.mimetype !== "application/pdf" ||
+        !file.buffer.subarray(0, 5).equals(Buffer.from("%PDF-"))
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "Only valid PDF files are allowed.",
+        });
+      }
+
+      const { id: assignmentId } = req.params;
+      const assignment = await prisma.assignment.findUnique({
+        where: { id: assignmentId },
+        select: { id: true, status: true, dueDate: true },
+      });
+
+      if (!assignment) {
+        return res.status(404).json({
+          success: false,
+          error: "Assignment not found.",
+        });
+      }
+
+      if (assignment.status === "CLOSED") {
+        return res.status(400).json({
+          success: false,
+          error: "This assignment is closed and no longer accepts submissions.",
+        });
+      }
+
+      const existingSubmission = await prisma.submission.findUnique({
+        where: {
+          assignmentId_studentId: {
+            assignmentId,
+            studentId: req.user!.id,
+          },
+        },
+        select: { attemptsUsed: true, fileUrl: true },
+      });
+
+      const uploadAttemptsUsed = existingSubmission?.attemptsUsed ?? 1;
+
+      if (uploadAttemptsUsed >= 2) {
+        return res.status(409).json({
+          success: false,
+          error:
+            "You have already used both submission attempts for this assignment.",
+          attemptsUsed: 2,
+          attemptsRemaining: 0,
+        });
+      }
+
+      const fileUrl = await uploadPdfToR2(file, req.user!.id, assignmentId);
+      const nextAttemptsUsed = existingSubmission ? uploadAttemptsUsed + 1 : 1;
+      const submission = await prisma.submission.upsert({
+        where: {
+          assignmentId_studentId: {
+            assignmentId,
+            studentId: req.user!.id,
+          },
+        },
+        create: {
+          assignmentId,
+          studentId: req.user!.id,
+          studentEmail: req.user!.email,
+          fileUrl,
+          attemptsUsed: nextAttemptsUsed,
+          status: new Date() > assignment.dueDate ? "LATE" : "SUBMITTED",
+        },
+        update: {
+          fileUrl,
+          attemptsUsed: nextAttemptsUsed,
+          submittedAt: new Date(),
+          status: new Date() > assignment.dueDate ? "LATE" : "SUBMITTED",
+        },
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: "PDF uploaded successfully.",
+        fileUrl,
+        attemptsUsed: nextAttemptsUsed,
+        attemptsRemaining: 2 - nextAttemptsUsed,
+        submission,
+      });
+    } catch (error: any) {
+      console.error("Error uploading assignment PDF:", error);
+
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to upload PDF",
+      });
+    }
+  },
+);
+
+/**
+ * POST /api/student/assignments/:id/submit
+ *
+ * Creates or updates the authenticated student's submission for an assignment.
+ * Body: { content?: string, fileUrl?: string }
+ */
+router.post(
+  "/student/assignments/:id/submit",
+  requireAuth,
+  requireRole("student"),
+  async (req, res) => {
+    try {
+      const { id: assignmentId } = req.params;
+      const { content, fileUrl } = req.body;
+
+      const submissionContent =
+        typeof content === "string" ? content.trim() : "";
+      const submissionFileUrl =
+        typeof fileUrl === "string" ? fileUrl.trim() : "";
+
+      if (!submissionContent && !submissionFileUrl) {
+        return res.status(400).json({
+          success: false,
+          error: "Submission content or file URL is required.",
+        });
+      }
+
+      const assignment = await prisma.assignment.findUnique({
+        where: { id: assignmentId },
+        select: { id: true, status: true, dueDate: true },
+      });
+
+      if (!assignment) {
+        return res.status(404).json({
+          success: false,
+          error: "Assignment not found.",
+        });
+      }
+
+      if (assignment.status === "CLOSED") {
+        return res.status(400).json({
+          success: false,
+          error: "This assignment is closed and no longer accepts submissions.",
+        });
+      }
+
+      const isLate = new Date() > assignment.dueDate;
+      const existingSubmission = await prisma.submission.findUnique({
+        where: {
+          assignmentId_studentId: {
+            assignmentId,
+            studentId: req.user!.id,
+          },
+        },
+        select: { attemptsUsed: true, fileUrl: true },
+      });
+      const sameUploadedFile =
+        Boolean(submissionFileUrl) &&
+        submissionFileUrl === existingSubmission?.fileUrl;
+      const attemptsUsed = existingSubmission
+        ? (existingSubmission.attemptsUsed ?? 1)
+        : 0;
+
+      if (attemptsUsed >= 2 && !sameUploadedFile) {
+        return res.status(409).json({
+          success: false,
+          error:
+            "You have already used both submission attempts for this assignment.",
+          attemptsUsed: 2,
+          attemptsRemaining: 0,
+        });
+      }
+
+      const nextAttemptsUsed = sameUploadedFile
+        ? attemptsUsed
+        : attemptsUsed + 1;
+      const submission = await prisma.submission.upsert({
+        where: {
+          assignmentId_studentId: {
+            assignmentId,
+            studentId: req.user!.id,
+          },
+        },
+        create: {
+          assignmentId,
+          studentId: req.user!.id,
+          studentEmail: req.user!.email,
+          content: submissionContent || null,
+          fileUrl: submissionFileUrl || existingSubmission?.fileUrl || null,
+          attemptsUsed: nextAttemptsUsed,
+          status: isLate ? "LATE" : "SUBMITTED",
+        },
+        update: {
+          content: submissionContent || null,
+          fileUrl: submissionFileUrl || existingSubmission?.fileUrl || null,
+          attemptsUsed: nextAttemptsUsed,
+          submittedAt: new Date(),
+          status: isLate ? "LATE" : "SUBMITTED",
+        },
+      });
+
+      return res.status(201).json({
+        success: true,
+        message:
+          nextAttemptsUsed === 1
+            ? "Assignment submitted successfully. You have one correction attempt remaining."
+            : "Assignment correction submitted successfully. No attempts remain.",
+        attemptsUsed: nextAttemptsUsed,
+        attemptsRemaining: 2 - nextAttemptsUsed,
+        submission,
+      });
+    } catch (error: any) {
+      console.error("Error submitting assignment:", error);
+
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to submit assignment",
+      });
+    }
+  },
+);
+
+/**
+ * GET /api/teacher/assignment
  *
  * Optional query:
  * ?teacherEmail=teacher@example.com
