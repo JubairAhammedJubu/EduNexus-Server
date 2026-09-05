@@ -28,6 +28,7 @@ model User {
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
 
+<<<<<<< HEAD
   // ── Two-factor authentication (authenticator app) ──
   twoFactorEnabled Boolean @default(false)
 
@@ -39,6 +40,8 @@ model User {
   // log in.
   isApproved Boolean @default(true)
 
+=======
+>>>>>>> 2a722cbf9e61db6ea185b9668d304bcbf0dbd2d2
   // ── Extended profile info (collected in the post-registration step) ──
   fatherName    String?
   motherName    String?
@@ -48,7 +51,10 @@ model User {
   // student-only
   schoolName    String?
   studentClass  String?
+<<<<<<< HEAD
   studentSection String?
+=======
+>>>>>>> 2a722cbf9e61db6ea185b9668d304bcbf0dbd2d2
   // teacher-only
   qualification String?
 
@@ -58,8 +64,11 @@ model User {
   sessions Session[]
   accounts Account[]
   notices  Notice[]
+<<<<<<< HEAD
   twoFactors TwoFactor[]
   submissions Submission[]
+=======
+>>>>>>> 2a722cbf9e61db6ea185b9668d304bcbf0dbd2d2
 
   @@map("users")
 }
@@ -127,6 +136,7 @@ model Verification {
   @@map("verifications")
 }
 
+<<<<<<< HEAD
 // Authenticator-app (TOTP) secrets + backup codes. Managed by Better Auth's
 // `twoFactor` plugin (see src/lib/auth.ts) — field names/shapes follow its
 // required schema exactly.
@@ -144,6 +154,8 @@ model TwoFactor {
   @@map("two_factors")
 }
 
+=======
+>>>>>>> 2a722cbf9e61db6ea185b9668d304bcbf0dbd2d2
 model ClassSubjectRequest {
   id            String   @id @default(auto()) @map("_id") @db.ObjectId
   teacherEmail  String
@@ -184,8 +196,11 @@ model Assignment {
   teacherEmail String
   teacherName  String?
 
+<<<<<<< HEAD
   submissions Submission[]
 
+=======
+>>>>>>> 2a722cbf9e61db6ea185b9668d304bcbf0dbd2d2
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -195,6 +210,7 @@ model Assignment {
 
   @@map("assignments")
 }
+<<<<<<< HEAD
 model Submission {
   id           String   @id @default(auto()) @map("_id") @db.ObjectId
 
@@ -223,3 +239,5 @@ model Submission {
   @@unique([assignmentId, studentId])
   @@map("submissions")
 }
+=======
+>>>>>>> 2a722cbf9e61db6ea185b9668d304bcbf0dbd2d2
