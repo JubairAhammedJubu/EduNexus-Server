@@ -1,5 +1,5 @@
 import {betterAuth} from "better-auth";
-import {bearer} from "better-auth/plugins";
+import {bearer, twoFactor} from "better-auth/plugins";
 import {prismaAdapter} from "better-auth/adapters/prisma";
 import {APIError, createAuthMiddleware} from "better-auth/api";
 import {prisma} from "./prisma.js";
@@ -8,8 +8,7 @@ import {prisma} from "./prisma.js";
 // Kew 3 bar bhul password dile, tar account 5 ghontar jonno login
 // kora theke lock hoye jabe.
 const MAX_FAILED_LOGIN_ATTEMPTS = 3;
-const LOCKOUT_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
-
+const LOCKOUT_DURATION_MS = 5 * 60 * 60 * 1000; // 5 hours
 
 function formatRemainingLockTime(lockedUntil: Date): string {
   const msLeft = lockedUntil.getTime() - Date.now();
@@ -37,7 +36,16 @@ export const auth = betterAuth({
   basePath: "/api/auth",
   trustedOrigins: clientOrigins,
 
-  plugins: [bearer()],
+  plugins: [
+    bearer(),
+    // Authenticator-app (TOTP) 2FA. First successful email+password login
+    // (before `user.twoFactorEnabled`) lets the client call
+    // `twoFactor.enable` to get a QR code; every login after that goes
+    // through the `twoFactorRedirect` + `verify-totp` flow automatically.
+    twoFactor({
+      issuer: "EduNexus",
+    }),
+  ],
 
   database: prismaAdapter(prisma, {
     provider: "mongodb",
@@ -55,7 +63,10 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 8,
-    autoSignIn: true,
+    // Registration-er por account pending-approval obosthay thake, tai
+    // shathe shathe sign in kore dei na — user-ke login form-e pathiye
+    // dei, approve howar por normal login diye dhukte hobe.
+    autoSignIn: false,
   },
 
   user: {
@@ -65,6 +76,17 @@ export const auth = betterAuth({
         required: false,
         defaultValue: "student",
         input: false, // client theke role pathano jabe na
+      },
+      // NOTE: better-auth's internal field-transform step only keeps
+      // fields declared here — anything else in a databaseHooks return
+      // value gets silently dropped before it ever reaches Prisma. This
+      // MUST be declared for the isApproved:false override (see
+      // databaseHooks.user.create.before below) to actually persist.
+      isApproved: {
+        type: "boolean",
+        required: false,
+        defaultValue: true,
+        input: false, // client theke set kora jabe na — shudhu admin approve endpoint diye change hoy
       },
     },
   },
@@ -94,6 +116,10 @@ export const auth = betterAuth({
             data: {
               ...user,
               role,
+              // Notun kono registration always pending approval-e shuru
+              // hoy — admin approve na kora porjonto login kora jabe na
+              // (dekho hooks.before, "/sign-in/email" check-e).
+              isApproved: false,
             },
           };
         },
@@ -116,8 +142,16 @@ export const auth = betterAuth({
 
       const user = await prisma.user.findUnique({
         where: {email},
-        select: {lockedUntil: true},
+        select: {lockedUntil: true, isApproved: true},
       });
+
+      if (user && !user.isApproved) {
+        throw new APIError("FORBIDDEN", {
+          message:
+            "Apnar account ekhono admin approval-er jonno pending ache. Doya kore admin approve korar por abar try korun.",
+          code: "ACCOUNT_PENDING_APPROVAL",
+        });
+      }
 
       if (user?.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
         throw new APIError("FORBIDDEN", {
