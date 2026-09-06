@@ -48,12 +48,8 @@ model User {
   // student-only
   schoolName    String?
   studentClass  String?
-<<<<<<< HEAD
-  studentSection String?
-=======
-  section       String?
+  studentSection       String?
   roll          String?
->>>>>>> 08edd8408a8f53868612387aa0e74cf90f2ff342
   // teacher-only
   qualification String?
 

@@ -405,26 +405,10 @@ router.post("/teacher/assignments", ...teacherOnly, async (req, res) => {
     } = req.body;
 
     // Required fields
-<<<<<<< HEAD
     if (!title || !subject || !grade || !section || !dueDate) {
       return res.status(400).json({
         success: false,
         error: "Title, subject, grade, section, and due date are required.",
-=======
-    if (
-      !title ||
-      !description ||
-      !subject ||
-      !grade ||
-      !section ||
-      !dueDate ||
-      !teacherEmail
-    ) {
-      return res.status(400).json({
-        success: false,
-        error:
-          "Title, description, subject, grade, section, due date, and teacher email are required.",
->>>>>>> 08edd8408a8f53868612387aa0e74cf90f2ff342
       });
     }
 
@@ -478,26 +462,10 @@ router.patch("/teacher/assignments/:id", ...teacherOnly, async (req, res) => {
       status,
     } = req.body;
 
-<<<<<<< HEAD
     if (!title || !subject || !grade || !section || !dueDate) {
       return res.status(400).json({
         success: false,
         error: "Title, subject, grade, section, and due date are required.",
-=======
-    if (
-      !title ||
-      !description ||
-      !subject ||
-      !grade ||
-      !section ||
-      !dueDate ||
-      !teacherEmail
-    ) {
-      return res.status(400).json({
-        success: false,
-        error:
-          "Title, description, subject, grade, section, due date, and teacher email are required.",
->>>>>>> 08edd8408a8f53868612387aa0e74cf90f2ff342
       });
     }
 
