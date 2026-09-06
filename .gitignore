@@ -1,5 +1,9 @@
 node_modules/
 dist/
+<<<<<<< HEAD
 .env*
 !.env.example
+=======
+.env
+>>>>>>> 08edd8408a8f53868612387aa0e74cf90f2ff342
 .vercel
