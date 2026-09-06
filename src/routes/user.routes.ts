@@ -142,8 +142,7 @@ router.get("/students", requireAuth, async (_req, res) => {
  * bio, and the extended details collected in the post-registration step:
  * father/mother name, date of birth, address, blood group, and the
  * role-specific fields — schoolName/studentClass/section for students,
- * qualification for teachers) without requiring session cookies or
- * requireAuth middleware.
+ * qualification for teachers)
  */
 router.put("/user/profile", requireAuth, async (req, res) => {
   try {
@@ -162,8 +161,8 @@ router.put("/user/profile", requireAuth, async (req, res) => {
       schoolName,
       studentClass,
       studentSection,
-      qualification,
-      roll,
+      qualification
+
     } = req.body;
 
     const userId = req.user?.id;
@@ -197,7 +196,7 @@ router.put("/user/profile", requireAuth, async (req, res) => {
         ...(qualification !== undefined && {
           qualification: qualification.trim(),
         }),
-        ...(roll !== undefined && { roll: roll.trim() }),
+        
       },
     });
 
