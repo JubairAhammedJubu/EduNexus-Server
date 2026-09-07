@@ -223,3 +223,35 @@ model Submission {
   @@unique([assignmentId, studentId])
   @@map("submissions")
 }
+
+model Exam {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  title        String
+  subject      String
+  studentClass String
+  section      String   @default("Section A")
+  group        String?
+  examType     String   @default("Mid-Term") // "Class Test" | "Quiz" | "Mid-Term" | "Final Term"
+  date         String   // YYYY-MM-DD
+  startTime    String   @default("09:00 AM")
+  endTime      String   @default("11:30 AM")
+  roomNo       String   @default("Hall 101")
+  totalMarks   Int      @default(100)
+  passingMarks Int      @default(40)
+  invigilator  String?
+  isYourDuty   Boolean  @default(true)
+  syllabus     String?
+  status       String   @default("Upcoming") // "Upcoming" | "Ongoing" | "Completed" | "Cancelled"
+  teacherEmail String?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([studentClass])
+  @@index([status])
+  @@index([date])
+
+  @@map("examinations")
+}
+
+
