@@ -2,10 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import { fromNodeHeaders } from "better-auth/node";
 import { auth } from "../lib/auth.js";
 
-// Augment Express's Request so downstream handlers get typed access to
-// the authenticated user/session without re-fetching it.
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       user?: Awaited<ReturnType<typeof auth.api.getSession>> extends infer S
@@ -23,9 +20,7 @@ declare global {
 }
 
 /**
- * Verifies the Better Auth session cookie on the incoming request and
- * attaches `req.user` / `req.session`. Responds with 401 if there is no
- * valid session — use this to protect any route that requires login.
+ * Verifies the Better Auth session via Cookie OR Authorization Header (Bearer Token)
  */
 export async function requireAuth(
   req: Request,
