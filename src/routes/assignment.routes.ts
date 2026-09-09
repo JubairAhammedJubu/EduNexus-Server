@@ -34,6 +34,12 @@ function handlePdfUpload(req: any, res: any, next: any) {
  * section. Class and section are read from the student's profile, not from
  * query parameters.
  */
+/**
+ * GET /api/student/assignments
+ *
+ * Returns active assignments for the authenticated student's class and section,
+ * including the student's own submission (fileUrl, status, attempts, etc.).
+ */
 router.get(
   "/student/assignments",
   requireAuth,
@@ -61,25 +67,62 @@ router.get(
           section: student.studentSection,
           status: "ACTIVE",
         },
+        include: {
+          submissions: {
+            where: { studentId: req.user!.id }, // only this student's submission
+            select: {
+              fileUrl: true,
+              content: true,
+              status: true,
+              attemptsUsed: true,
+              marks: true,
+              feedback: true,
+              submittedAt: true,
+            },
+            take: 1, // a student can have only one submission per assignment
+          },
+        },
         orderBy: {
           dueDate: "asc",
         },
       });
 
+      // Shape the response for the frontend
+      const enrichedAssignments = assignments.map((assignment) => {
+        const submission = assignment.submissions[0] || null;
+
+        // remove the nested array so the frontend gets a flat object
+        const { submissions, ...rest } = assignment;
+        console.log(submission,rest)
+
+        return {
+          ...rest,
+          submitStatus: submission
+            ? submission.status === "GRADED"
+              ? "GRADED"
+              : "SUBMITTED"
+            : "PENDING",
+          fileUrl: submission?.fileUrl || null,
+          attemptsUsed: submission?.attemptsUsed || 0,
+          marks: submission?.marks ?? null,
+          feedback: submission?.feedback ?? null,
+          submittedAt: submission?.submittedAt ?? null,
+        };
+      });
+
       return res.json({
         success: true,
-        count: assignments.length,
-        assignments,
+        count: enrichedAssignments.length,
+        assignments: enrichedAssignments,
       });
     } catch (error: any) {
       console.error("Error fetching student assignments:", error);
-
       return res.status(500).json({
         success: false,
         error: error?.message || "Failed to fetch student assignments",
       });
     }
-  },
+  }
 );
 
 /**
@@ -203,7 +246,11 @@ router.post(
           status: new Date() > assignment.dueDate ? "LATE" : "SUBMITTED",
         },
       });
-
+      // const status = // Mark the assignment as having received submissions
+      //   await prisma.assignment.update({
+      //     where: { id: assignmentId },
+      //     data: { submitStatus: "SUBMITTED" },
+      //   });
       return res.status(201).json({
         success: true,
         message: "PDF uploaded successfully.",
@@ -323,7 +370,11 @@ router.post(
           status: isLate ? "LATE" : "SUBMITTED",
         },
       });
-
+      const status = // Mark the assignment as having received submissions
+        await prisma.assignment.update({
+          where: { id: assignmentId },
+          data: { submitStatus: "SUBMITTED" },
+        });
       return res.status(201).json({
         success: true,
         message:
@@ -424,6 +475,7 @@ router.post("/teacher/assignments", ...teacherOnly, async (req, res) => {
         teacherEmail: req.user!.email,
         teacherName: req.user!.name || teacherName?.trim() || null,
         status: status || "ACTIVE",
+        submitStatus: "PENDING",
       },
     });
 
