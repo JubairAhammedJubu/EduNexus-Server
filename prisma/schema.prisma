@@ -180,7 +180,7 @@ model Assignment {
 
   status      String   @default("ACTIVE")
   // "ACTIVE" | "DRAFT" | "CLOSED"
-
+  submitStatus String       @default("PENDING")
   teacherEmail String
   teacherName  String?
 
