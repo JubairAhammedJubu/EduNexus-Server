@@ -179,5 +179,126 @@ router.get("/teacher/results", async (req, res) => {
     });
   }
 });
+router.delete("/teacher/results/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
 
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: "Result ID is required.",
+      });
+    }
+
+    const existingResult = await prisma.studentResult.findUnique({
+      where: { id },
+    });
+
+    if (!existingResult) {
+      return res.status(404).json({
+        success: false,
+        error: "Result not found.",
+      });
+    }
+
+    await prisma.studentResult.delete({
+      where: { id },
+    });
+
+    return res.json({
+      success: true,
+      message: "Result deleted successfully.",
+    });
+  } catch (error: any) {
+    console.error("Error deleting result:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to delete result.",
+    });
+  }
+});
+
+router.patch("/teacher/results/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: "Result ID is required.",
+      });
+    }
+
+    const existingResult = await prisma.studentResult.findUnique({
+      where: { id },
+    });
+
+    if (!existingResult) {
+      return res.status(404).json({
+        success: false,
+        error: "Result not found.",
+      });
+    }
+
+    const {
+      studentId,
+      studentName,
+      studentEmail,
+      studentClass,
+      assignmentId,
+      exam,
+      score,
+      total,
+      grade,
+      status,
+    } = req.body;
+
+    if (
+      !studentId ||
+      !studentName ||
+      !studentEmail ||
+      !studentClass ||
+      !exam ||
+      score === undefined ||
+      total === undefined ||
+      !grade
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: "All required result fields must be provided.",
+      });
+    }
+
+    const updatedResult = await prisma.studentResult.update({
+      where: { id },
+      data: {
+        studentId,
+        studentName,
+        studentEmail,
+        studentClass,
+        assignmentId: assignmentId || null,
+        exam,
+        score: Number(score),
+        total: Number(total),
+        grade,
+        status: status || existingResult.status,
+      },
+    });
+
+    return res.json({
+      success: true,
+      message: "Result updated successfully.",
+      result: updatedResult,
+    });
+  } catch (error: any) {
+    console.error("Error updating result:", error);
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message || "Failed to update result.",
+    });
+  }
+});
 export default router;
