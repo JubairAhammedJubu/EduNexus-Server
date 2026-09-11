@@ -5,8 +5,8 @@ import {APIError, createAuthMiddleware} from "better-auth/api";
 import {prisma} from "./prisma.js";
 
 // ── Login lockout policy ───────────────────────────────────────────
-// Kew 3 bar bhul password dile, tar account 5 ghontar jonno login
-// kora theke lock hoye jabe.
+// If a user enters an incorrect password 3 times, their account will be
+// locked for 5 hours.
 const MAX_FAILED_LOGIN_ATTEMPTS = 3;
 const LOCKOUT_DURATION_MS = 5 * 60 * 60 * 1000; // 5 hours
 
@@ -63,9 +63,9 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 8,
-    // Registration-er por account pending-approval obosthay thake, tai
-    // shathe shathe sign in kore dei na — user-ke login form-e pathiye
-    // dei, approve howar por normal login diye dhukte hobe.
+    // After registration, the account remains in pending-approval state, so
+    // we do not automatically sign in — the user is redirected to the login form
+    // and must log in normally after admin approval.
     autoSignIn: false,
   },
 
@@ -75,7 +75,7 @@ export const auth = betterAuth({
         type: ["admin", "teacher", "student"],
         required: false,
         defaultValue: "student",
-        input: false, // client theke role pathano jabe na
+        input: false, // cannot be passed from client
       },
       phone:{
         type: "string",
@@ -110,7 +110,7 @@ export const auth = betterAuth({
         type: "boolean",
         required: false,
         defaultValue: true,
-        input: false, // client theke set kora jabe na — shudhu admin approve endpoint diye change hoy
+        input: false, // cannot be set from client — only changed via admin approve endpoint
       },
     },
   },
@@ -128,7 +128,7 @@ export const auth = betterAuth({
           } else if (email.endsWith("@edunexus.tchr.com")) {
             role = "teacher";
           } else {
-            // Institution email na hole registration reject
+            // Reject registration if not an institution email
             throw new APIError("BAD_REQUEST", {
               message:
                 "Not an institution email. Use your @edunexus.std.com or @edunexus.tchr.com address to register.",
@@ -140,9 +140,9 @@ export const auth = betterAuth({
             data: {
               ...user,
               role,
-              // Notun kono registration always pending approval-e shuru
-              // hoy — admin approve na kora porjonto login kora jabe na
-              // (dekho hooks.before, "/sign-in/email" check-e).
+              // Any new registration always starts in pending approval state —
+              // login is not allowed until approved by an admin
+              // (see hooks.before "/sign-in/email" check).
               isApproved: false,
             },
           };
@@ -157,7 +157,7 @@ export const auth = betterAuth({
   },
 
   hooks: {
-    // Sign-in shuru howar age check kori account lock kina.
+    // Check if account is locked before initiating sign-in.
     before: createAuthMiddleware(async (ctx) => {
       if (ctx.path !== "/sign-in/email") return;
 
@@ -172,25 +172,25 @@ export const auth = betterAuth({
       if (user && !user.isApproved) {
         throw new APIError("FORBIDDEN", {
           message:
-            "Apnar account ekhono admin approval-er jonno pending ache. Doya kore admin approve korar por abar try korun.",
+            "Your account is pending admin approval. Please try again after an admin approves your account.",
           code: "ACCOUNT_PENDING_APPROVAL",
         });
       }
 
       if (user?.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
         throw new APIError("FORBIDDEN", {
-          message: `Onek bar bhul password deyar karone apnar account temporarily lock kora hoyeche. Doya kore ${formatRemainingLockTime(
+          message: `Your account has been temporarily locked due to multiple incorrect password attempts. Please try again in ${formatRemainingLockTime(
             user.lockedUntil,
-          )} por abar try korun.`,
+          )}.`,
           code: "ACCOUNT_LOCKED",
-          // Frontend eta diye countdown dekhabe (ISO timestamp).
+          // Used by frontend to display countdown (ISO timestamp).
           lockedUntil: user.lockedUntil.toISOString(),
         });
       }
     }),
 
-    // Sign-in process shesh howar por result dekhe decide kori attempt
-    // count barabo naki reset korbo.
+    // After sign-in process completes, decide whether to increment
+    // attempt count or reset based on result.
     after: createAuthMiddleware(async (ctx) => {
       if (ctx.path !== "/sign-in/email") return;
 
@@ -216,13 +216,12 @@ export const auth = betterAuth({
             data: {failedLoginAttempts: 0, lockedUntil},
           });
 
-          // Just-now-locked hoyeche — eibar-i "wrong password" er bodole
-          // "account locked" message + lockedUntil pathai, jate frontend
-          // shathe shathe countdown shuru korte pare.
+          // Account just got locked — send "account locked" message + lockedUntil
+          // instead of "wrong password" so frontend can start countdown immediately.
           throw new APIError("FORBIDDEN", {
-            message: `Apni ${MAX_FAILED_LOGIN_ATTEMPTS} bar bhul password diyechen. Nirapottar jonno apnar account ${formatRemainingLockTime(
+            message: `You have entered an incorrect password ${MAX_FAILED_LOGIN_ATTEMPTS} times. For security reasons, your account has been locked for ${formatRemainingLockTime(
               lockedUntil,
-            )} er jonno lock kora holo.`,
+            )}.`,
             code: "ACCOUNT_LOCKED",
             lockedUntil: lockedUntil.toISOString(),
           });
@@ -233,7 +232,7 @@ export const auth = betterAuth({
           data: {failedLoginAttempts: attempts},
         });
       } else if (user.failedLoginAttempts > 0 || user.lockedUntil) {
-        // Successful login — purono kono bhul attempt / lock thakle clear kore dei.
+        // Successful login — clear any previous failed attempts or lockout.
         await prisma.user.update({
           where: {email},
           data: {failedLoginAttempts: 0, lockedUntil: null},
