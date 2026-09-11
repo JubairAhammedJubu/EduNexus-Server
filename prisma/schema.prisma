@@ -24,7 +24,7 @@ model User {
   bio           String?
   role          String  @default("student") // "admin" | "teacher" | "student"
 
-  // ── Login lockout tracking (3 bhul password dile 5 ghonta lock) ──
+  // ── Login lockout tracking (3 incorrect passwords lock account for 5 hours) ──
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
 

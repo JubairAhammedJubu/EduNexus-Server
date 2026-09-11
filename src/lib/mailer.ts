@@ -1,15 +1,15 @@
 import nodemailer from "nodemailer";
 
 // ── Email transport (forgot-password link) ─────────────────────────
-// Ekhane amra generic SMTP use korchi (Gmail app-password, Mailtrap,
-// Brevo, or je kono SMTP provider-e kaj korbe) — Resend/SES-er moto
-// kono third-party account lagbe na, khali SMTP credentials.
+// Here we are using generic SMTP (Gmail app-password, Mailtrap,
+// Brevo, or any SMTP provider) — no third-party services like Resend/SES
+// required, just SMTP credentials.
 const smtpPort = Number(process.env.SMTP_PORT ?? 587);
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: smtpPort,
-  // 465 hocche implicit-TLS port; baki shob port (587, 25...) STARTTLS use kore.
+  // Port 465 is implicit TLS; all other ports (587, 25...) use STARTTLS.
   secure: smtpPort === 465,
   auth: process.env.SMTP_USER
     ? {
@@ -36,10 +36,10 @@ export async function sendPasswordResetEmail(params: {
   const { to, name, url } = params;
 
   if (!process.env.SMTP_HOST) {
-    // SMTP configure kora na thakle (e.g. local dev-e), link console-e
-    // log kore dei jate testing kora jay email pathano chara-o.
+    // If SMTP is not configured (e.g. local dev), log the link in the
+    // console so testing can be done without sending emails.
     console.warn(
-      `[mailer] SMTP_HOST set kora nei — reset link console-e print kora holo:\n${url}`,
+      `[mailer] SMTP_HOST is not set — reset link printed to console:\n${url}`,
     );
     return;
   }
