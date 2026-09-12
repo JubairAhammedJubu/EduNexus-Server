@@ -162,6 +162,17 @@ router.patch(
         });
       }
 
+      const existingRequest = await prisma.classSubjectRequest.findUnique({
+        where: { id },
+      });
+
+      if (!existingRequest) {
+        return res.status(404).json({
+          success: false,
+          error: "Request record not found.",
+        });
+      }
+
       const updated = await prisma.classSubjectRequest.update({
         where: { id },
         data: {
@@ -170,9 +181,39 @@ router.patch(
         },
       });
 
+      // If approved, update the new teacher's assignedClass & assignedSubject in User table
+      if (status === "APPROVED" && existingRequest.teacherEmail) {
+        const fullClass = `${existingRequest.grade} ${existingRequest.section}`;
+        
+        // 1. Update requesting teacher's record
+        await prisma.user.updateMany({
+          where: { email: existingRequest.teacherEmail },
+          data: {
+            assignedClass: fullClass,
+            assignedSubject: existingRequest.subject,
+          } as any,
+        });
+
+        // 2. Unassign previous teacher if they were teaching the exact same class and subject
+        await prisma.user.updateMany({
+          where: {
+            role: "teacher",
+            email: { not: existingRequest.teacherEmail },
+            assignedClass: fullClass,
+            assignedSubject: existingRequest.subject,
+          } as any,
+          data: {
+            assignedClass: null,
+            assignedSubject: null,
+          } as any,
+        });
+      }
+
       return res.json({
         success: true,
-        message: `Request status updated to ${status}`,
+        message: status === "APPROVED" 
+          ? `Request approved! Class ${existingRequest.grade} ${existingRequest.section} (${existingRequest.subject}) assigned to ${existingRequest.teacherName}.` 
+          : `Request status updated to ${status}.`,
         request: updated,
       });
     } catch (error: any) {
