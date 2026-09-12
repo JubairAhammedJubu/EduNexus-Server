@@ -13,18 +13,18 @@ datasource db {
 // used for EduNexus's admin / teacher / student access control.
 
 model User {
-  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  id            String  @id @default(auto()) @map("_id") @db.ObjectId
   name          String
-  email         String    @unique
-  emailVerified Boolean   @default(false)
+  email         String  @unique
+  emailVerified Boolean @default(false)
   image         String?
   phone         String?
   location      String?
   department    String?
   bio           String?
-  role          String    @default("student") // "admin" | "teacher" | "student"
+  role          String  @default("student") // "admin" | "teacher" | "student"
 
-  // ── Login lockout tracking (3 bhul password dile 5 ghonta lock) ──
+  // ── Login lockout tracking (3 incorrect passwords lock account for 5 hours) ──
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
 
@@ -40,24 +40,26 @@ model User {
   isApproved Boolean @default(true)
 
   // ── Extended profile info (collected in the post-registration step) ──
-  fatherName    String?
-  motherName    String?
-  dateOfBirth   DateTime?
-  address       String?
-  bloodGroup    String?
+  fatherName     String?
+  motherName     String?
+  dateOfBirth    DateTime?
+  address        String?
+  bloodGroup     String?
   // student-only
-  schoolName    String?
-  studentClass  String?
+  schoolName     String?
+  studentClass   String?
+  studentSection String?
   // teacher-only
-  qualification String?
+  qualification  String?
 
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  sessions Session[]
-  accounts Account[]
-  notices  Notice[]
-  twoFactors TwoFactor[]
+  sessions    Session[]
+  accounts    Account[]
+  notices     Notice[]
+  twoFactors  TwoFactor[]
+  submissions Submission[]
 
   @@map("users")
 }
@@ -76,7 +78,6 @@ model Notice {
 
   @@map("notices")
 }
-
 
 model Session {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
@@ -162,32 +163,120 @@ model ClassSubjectRequest {
 
   @@map("class_subject_requests")
 }
+
 model Assignment {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  id String @id @default(auto()) @map("_id") @db.ObjectId
 
   title       String
   description String?
 
-  subject     String
-  grade       String
-  section     String
+  subject String
+  grade   String
+  section String
 
-  dueDate     DateTime
+  dueDate DateTime
 
-  totalMarks  Int      @default(100)
+  totalMarks Int @default(100)
 
-  status      String   @default("ACTIVE")
+  status       String  @default("ACTIVE")
   // "ACTIVE" | "DRAFT" | "CLOSED"
-
+  submitStatus String  @default("PENDING")
   teacherEmail String
   teacherName  String?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  submissions Submission[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([teacherEmail])
   @@index([status])
   @@index([dueDate])
-
   @@map("assignments")
+}
+
+model Submission {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  assignmentId String     @db.ObjectId
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  studentId String @db.ObjectId
+  student   User   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  studentEmail String
+
+  content      String?
+  fileUrl      String?
+  attemptsUsed Int     @default(1)
+
+  marks    Int?
+  status   String  @default("SUBMITTED") // "SUBMITTED" | "GRADED" | "LATE"
+  feedback String?
+
+  submittedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([assignmentId, studentId])
+  @@index([assignmentId])
+  @@index([studentId])
+  @@map("submissions")
+}
+
+model Exam {
+  id           String  @id @default(auto()) @map("_id") @db.ObjectId
+  title        String
+  subject      String
+  studentClass String
+  section      String  @default("Section A")
+  group        String?
+  examType     String  @default("Mid-Term") // "Class Test" | "Quiz" | "Mid-Term" | "Final Term"
+  date         String // YYYY-MM-DD
+  startTime    String  @default("09:00 AM")
+  endTime      String  @default("11:30 AM")
+  roomNo       String  @default("Hall 101")
+  totalMarks   Int     @default(100)
+  passingMarks Int     @default(40)
+  invigilator  String?
+  isYourDuty   Boolean @default(true)
+  syllabus     String?
+  status       String  @default("Upcoming") // "Upcoming" | "Ongoing" | "Completed" | "Cancelled"
+  teacherEmail String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([studentClass])
+  @@index([status])
+  @@index([date])
+  @@map("examinations")
+}
+model StudentResult {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+
+  studentId    String
+  studentName  String
+  studentEmail String
+  studentClass String
+
+  assignmentId String?
+  exam         String
+
+  score        Int
+  total        Int
+  grade        String
+
+  status       String   @default("DRAFT")
+  // "DRAFT" | "PUBLISHED"
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([studentId])
+  @@index([studentEmail])
+  @@index([assignmentId])
+  @@index([status])
+
+  @@map("results")
 }

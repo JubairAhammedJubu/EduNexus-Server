@@ -1,21 +1,21 @@
 import { Router } from "express";
+import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
 
 const router = Router();
+const teacherOrAdmin = [requireAuth, requireRole("teacher", "admin")];
 
 /**
  * GET /api/teacher/requests
  * Accepts query params: ?teacherEmail=... or ?status=...
  * Returns matching classSubjectRequest records sorted newest first.
  */
-router.get("/teacher/requests", async (req, res) => {
+router.get("/teacher/requests", ...teacherOrAdmin, async (req, res) => {
   try {
-    const { teacherEmail, status } = req.query;
+    const { status } = req.query;
 
-    const whereClause: any = {};
-    if (teacherEmail && typeof teacherEmail === "string") {
-      whereClause.teacherEmail = teacherEmail;
-    }
+    const isAdmin = (req.user as { role?: string }).role === "admin";
+    const whereClause: any = isAdmin ? {} : { teacherEmail: req.user!.email };
     if (status && typeof status === "string") {
       whereClause.status = status;
     }
@@ -43,10 +43,9 @@ router.get("/teacher/requests", async (req, res) => {
  * Creates a new class & subject request.
  * Body: { teacherEmail, teacherName, grade, section, subject, subjectCode, room, schedule, time, reason }
  */
-router.post("/teacher/requests", async (req, res) => {
+router.post("/teacher/requests", ...teacherOrAdmin, async (req, res) => {
   try {
     const {
-      teacherEmail,
       teacherName,
       grade,
       section,
@@ -59,21 +58,23 @@ router.post("/teacher/requests", async (req, res) => {
       reason,
     } = req.body;
 
-    if (!teacherEmail || !grade || !section || !subject) {
+    if (!grade || !section || !subject) {
       return res.status(400).json({
         success: false,
-        error: "Teacher email, grade, section, and subject are required fields.",
+        error: "Grade, section, and subject are required fields.",
       });
     }
 
     const newRequest = await prisma.classSubjectRequest.create({
       data: {
-        teacherEmail,
-        teacherName: teacherName || "Teacher",
+        teacherEmail: req.user!.email,
+        teacherName: req.user!.name || teacherName || "Teacher",
         grade,
         section,
         subject,
-        subjectCode: subjectCode || `${subject.substring(0, 4).toUpperCase()}-${grade.replace(/[^0-9]/g, "") || "01"}${section.charAt(0)}`,
+        subjectCode:
+          subjectCode ||
+          `${subject.substring(0, 4).toUpperCase()}-${grade.replace(/[^0-9]/g, "") || "01"}${section.charAt(0)}`,
         group: group || null,
         room: room || "Room TBD",
         schedule: schedule || "Sun · Tue · Thu",
@@ -101,7 +102,7 @@ router.post("/teacher/requests", async (req, res) => {
  * DELETE /api/teacher/requests/:id
  * Cancels/Deletes a pending request.
  */
-router.delete("/teacher/requests/:id", async (req, res) => {
+router.delete("/teacher/requests/:id", ...teacherOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -114,6 +115,13 @@ router.delete("/teacher/requests/:id", async (req, res) => {
         success: false,
         error: "Request record not found",
       });
+    }
+
+    const isAdmin = (req.user as { role?: string }).role === "admin";
+    if (!isAdmin && existing.teacherEmail !== req.user!.email) {
+      return res
+        .status(403)
+        .json({ error: "You are not authorized to delete this request." });
     }
 
     await prisma.classSubjectRequest.delete({
@@ -138,38 +146,43 @@ router.delete("/teacher/requests/:id", async (req, res) => {
  * Updates request status to APPROVED or REJECTED with optional admin feedback.
  * Body: { status: "APPROVED" | "REJECTED", adminFeedback?: string }
  */
-router.patch("/admin/requests/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status, adminFeedback } = req.body;
+router.patch(
+  "/admin/requests/:id",
+  ...[requireAuth, requireRole("admin")],
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status, adminFeedback } = req.body;
 
-    if (!["APPROVED", "REJECTED", "PENDING"].includes(status)) {
-      return res.status(400).json({
+      if (!["APPROVED", "REJECTED", "PENDING"].includes(status)) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Invalid status value. Must be PENDING, APPROVED, or REJECTED.",
+        });
+      }
+
+      const updated = await prisma.classSubjectRequest.update({
+        where: { id },
+        data: {
+          status,
+          ...(adminFeedback !== undefined ? { adminFeedback } : {}),
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: `Request status updated to ${status}`,
+        request: updated,
+      });
+    } catch (error: any) {
+      console.error("Error updating request status:", error);
+      return res.status(500).json({
         success: false,
-        error: "Invalid status value. Must be PENDING, APPROVED, or REJECTED.",
+        error: error?.message || "Failed to update request status",
       });
     }
-
-    const updated = await prisma.classSubjectRequest.update({
-      where: { id },
-      data: {
-        status,
-        ...(adminFeedback !== undefined ? { adminFeedback } : {}),
-      },
-    });
-
-    return res.json({
-      success: true,
-      message: `Request status updated to ${status}`,
-      request: updated,
-    });
-  } catch (error: any) {
-    console.error("Error updating request status:", error);
-    return res.status(500).json({
-      success: false,
-      error: error?.message || "Failed to update request status",
-    });
-  }
-});
+  },
+);
 
 export default router;
