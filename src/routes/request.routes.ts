@@ -184,35 +184,21 @@ router.patch(
       // If approved, update the new teacher's assignedClass & assignedSubject in User table
       if (status === "APPROVED" && existingRequest.teacherEmail) {
         const fullClass = `${existingRequest.grade} ${existingRequest.section}`;
-        
-        // 1. Update requesting teacher's record
+
+        // Update requesting teacher's department/class allocation
         await prisma.user.updateMany({
           where: { email: existingRequest.teacherEmail },
           data: {
-            assignedClass: fullClass,
-            assignedSubject: existingRequest.subject,
-          } as any,
-        });
-
-        // 2. Unassign previous teacher if they were teaching the exact same class and subject
-        await prisma.user.updateMany({
-          where: {
-            role: "teacher",
-            email: { not: existingRequest.teacherEmail },
-            assignedClass: fullClass,
-            assignedSubject: existingRequest.subject,
-          } as any,
-          data: {
-            assignedClass: null,
-            assignedSubject: null,
-          } as any,
+            studentClass: fullClass,
+            department: existingRequest.subject,
+          },
         });
       }
 
       return res.json({
         success: true,
-        message: status === "APPROVED" 
-          ? `Request approved! Class ${existingRequest.grade} ${existingRequest.section} (${existingRequest.subject}) assigned to ${existingRequest.teacherName}.` 
+        message: status === "APPROVED"
+          ? `Request approved! Class ${existingRequest.grade} ${existingRequest.section} (${existingRequest.subject}) assigned to ${existingRequest.teacherName}.`
           : `Request status updated to ${status}.`,
         request: updated,
       });
