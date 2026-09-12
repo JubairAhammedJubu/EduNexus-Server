@@ -203,7 +203,9 @@ router.get(
         where.OR = [
           { name: { contains: search, mode: "insensitive" } },
           { email: { contains: search, mode: "insensitive" } },
-          { roll: { contains: search, mode: "insensitive" } },
+          { studentClass: { contains: search, mode: "insensitive" } },
+          { studentSection: { contains: search, mode: "insensitive" } },
+          { department: { contains: search, mode: "insensitive" } },
         ];
       }
 

@@ -11,6 +11,7 @@ import approvalRoutes from "./routes/approval.routes.js";
 import examRoutes from "./routes/exam.routes.js";
 import resultRoutes from "./routes/result.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
+import attendanceRoutes from "./routes/attendance.routes.js";
 import {prisma} from "./lib/prisma.js";
 
 const app = express();
@@ -43,6 +44,7 @@ app.use("/api", passwordResetRoutes);
 app.use("/api", approvalRoutes);
 app.use("/api", examRoutes);
 app.use("/api", adminRoutes);
+app.use("/api", attendanceRoutes);
 
 
 app.get("/health", async (_req, res) => {
