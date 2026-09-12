@@ -418,6 +418,25 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
 
     const assignments = await prisma.assignment.findMany({
       where: whereClause,
+      include: {
+        submissions: {
+          include: {
+            student: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                image: true,
+                studentClass: true,
+                studentSection: true,
+              },
+            },
+          },
+          orderBy: {
+            submittedAt: "desc",
+          },
+        },
+      },
       orderBy: {
         dueDate: "asc",
       },
@@ -433,6 +452,77 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: error?.message || "Failed to fetch assignments",
+    });
+  }
+});
+
+/**
+ * GET /api/teacher/assignments/:id/submissions
+ *
+ * Returns all submissions for a specific assignment. Only the assignment creator (or admin) can view them.
+ */
+router.get("/teacher/assignments/:id/submissions", ...teacherOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const assignment = await prisma.assignment.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        title: true,
+        subject: true,
+        grade: true,
+        section: true,
+        teacherEmail: true,
+        totalMarks: true,
+      },
+    });
+
+    if (!assignment) {
+      return res.status(404).json({
+        success: false,
+        error: "Assignment not found.",
+      });
+    }
+
+    const isAdmin = (req.user as { role?: string }).role === "admin";
+    if (!isAdmin && assignment.teacherEmail !== req.user!.email) {
+      return res.status(403).json({
+        success: false,
+        error: "You are not authorized to view submissions for this assignment.",
+      });
+    }
+
+    const submissions = await prisma.submission.findMany({
+      where: { assignmentId: id },
+      include: {
+        student: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            image: true,
+            studentClass: true,
+            studentSection: true,
+          },
+        },
+      },
+      orderBy: {
+        submittedAt: "desc",
+      },
+    });
+
+    return res.json({
+      success: true,
+      assignment,
+      submissions,
+    });
+  } catch (error: any) {
+    console.error("Error fetching assignment submissions:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to fetch submissions",
     });
   }
 });
