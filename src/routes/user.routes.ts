@@ -1,33 +1,115 @@
 import { Router } from "express";
+import multer from "multer";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
+import { getMaxImageSizeBytes, uploadImageToR2 } from "../lib/r2.js";
 
 const router = Router();
 
-// GET /api/me — any logged-in user (admin, teacher, or student).
-router.get("/me", requireAuth, (req, res) => {
-  res.json({ user: req.user });
+// Multer Config for R2 Uploads
+const uploadImage = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: getMaxImageSizeBytes() },
+  fileFilter: (_req, file, callback) => {
+    callback(
+      null,
+      ["image/jpeg", "image/png", "image/webp", "image/gif"].includes(
+        file.mimetype,
+      ),
+    );
+  },
 });
 
-// GET /api/admin/overview — admin-only example.
-router.get("/admin/overview", requireAuth, requireRole("admin"), (req, res) => {
-  res.json({ message: `Welcome, admin ${req.user?.name ?? ""}` });
+function handleImageUpload(req: any, res: any, next: any) {
+  uploadImage.fields([
+    { name: "file", maxCount: 1 },
+    { name: "image", maxCount: 1 },
+  ])(req, res, (error: any) => {
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error:
+          error.code === "LIMIT_FILE_SIZE"
+            ? "Image must be 5 MB or smaller."
+            : "A valid image is required in the 'file' field.",
+      });
+    }
+    next();
+  });
+}
+
+/**
+ * GET /api/me
+ * Returns profile of the currently logged-in user.
+ */
+router.get("/me", requireAuth, (req, res) => {
+  return res.json({ success: true, user: req.user });
 });
 
 /**
- * PUT /api/user/profile
- * Updates full profile information (name, image, phone, location, department,
- * bio, and the extended details collected in the post-registration step:
- * father/mother name, date of birth, address, blood group, and the
- * role-specific fields — schoolName/studentClass for students,
- * qualification for teachers) without requiring session cookies or
- * requireAuth middleware.
+ * GET /api/admin/overview
+ * Admin diagnostic route.
  */
-router.put("/user/profile", async (req, res) => {
+router.get("/admin/overview", requireAuth, requireRole("admin"), (req, res) => {
+  return res.json({ message: `Welcome, admin ${req.user?.name ?? ""}` });
+});
+
+/**
+ * POST /api/user/profile/image
+ * Uploads an image to Cloudflare R2 and updates profile image URL.
+ */
+router.post(
+  "/user/profile/image",
+  requireAuth,
+  handleImageUpload,
+  async (req, res) => {
+    try {
+      const userId = req.user?.id;
+      const files = req.files as
+        | { [fieldname: string]: Express.Multer.File[] }
+        | undefined;
+      const file = files?.file?.[0] ?? files?.image?.[0];
+
+      if (!userId) {
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: "A valid image is required in the 'file' field.",
+        });
+      }
+
+      const imageUrl = await uploadImageToR2(file, userId);
+      const user = await prisma.user.update({
+        where: { id: userId },
+        data: { image: imageUrl },
+      });
+
+      return res.json({
+        success: true,
+        message: "Profile image uploaded successfully.",
+        imageUrl,
+        user,
+      });
+    } catch (error: any) {
+      console.error("Error uploading profile image:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to upload profile image",
+      });
+    }
+  }
+);
+
+/**
+ * PUT /api/user/profile
+ * Updates user profile details.
+ */
+router.put("/user/profile", requireAuth, async (req, res) => {
   try {
     const {
-      email,
-      userId,
       name,
       image,
       phone,
@@ -41,23 +123,17 @@ router.put("/user/profile", async (req, res) => {
       bloodGroup,
       schoolName,
       studentClass,
+      studentSection,
       qualification,
     } = req.body;
 
-    const targetUserId = userId || req.user?.id;
-
-    if (!targetUserId && !email) {
-      return res.status(400).json({
-        error: "User email or ID is required to update profile.",
-      });
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
     }
 
-    const where = targetUserId
-      ? { id: targetUserId }
-      : { email: email.toLowerCase().trim() };
-
     const updatedUser = await prisma.user.update({
-      where,
+      where: { id: userId },
       data: {
         ...(name !== undefined && { name: name.trim() }),
         ...(image !== undefined && { image: image.trim() }),
@@ -76,6 +152,9 @@ router.put("/user/profile", async (req, res) => {
         ...(studentClass !== undefined && {
           studentClass: studentClass.trim(),
         }),
+        ...(studentSection !== undefined && {
+          studentSection: studentSection.trim(),
+        }),
         ...(qualification !== undefined && {
           qualification: qualification.trim(),
         }),
@@ -90,15 +169,103 @@ router.put("/user/profile", async (req, res) => {
   } catch (error: any) {
     console.error("Error updating profile:", error);
     return res.status(500).json({
+      success: false,
       error: error?.message || "Failed to update user profile information",
     });
   }
 });
 
 /**
+ * GET /api/teacher/students
+ * Fetches paginated & filtered list of students for teachers and admins.
+ */
+router.get(
+  "/teacher/students",
+  requireAuth,
+  requireRole("teacher", "admin"),
+  async (req, res) => {
+    try {
+      const page = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limit = Math.max(1, parseInt(req.query.limit as string) || 20);
+      const search = ((req.query.search as string) || "").trim();
+      const studentClass = ((req.query.studentClass as string) || "").trim();
+
+      const where: any = { role: "student" };
+
+      if (studentClass && studentClass !== "All Classes") {
+        where.studentClass = {
+          contains: studentClass,
+          mode: "insensitive",
+        };
+      }
+
+      if (search) {
+        where.OR = [
+          { name: { contains: search, mode: "insensitive" } },
+          { email: { contains: search, mode: "insensitive" } },
+          { roll: { contains: search, mode: "insensitive" } },
+        ];
+      }
+
+      const skip = (page - 1) * limit;
+
+      const [totalCount, students] = await Promise.all([
+        prisma.user.count({ where }),
+        prisma.user.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: { name: "asc" },
+        }),
+      ]);
+
+      const distinctClasses = await prisma.user.findMany({
+        where: { role: "student", studentClass: { not: null } },
+        select: { studentClass: true },
+        distinct: ["studentClass"],
+      });
+
+      const defaultClasses = [
+        "All Classes",
+        "Class 6",
+        "Class 7",
+        "Class 8",
+        "Class 9",
+        "Class 10",
+      ];
+      const classSet = new Set<string>(defaultClasses);
+      distinctClasses.forEach((c) => {
+        if (c.studentClass && c.studentClass.trim()) {
+          classSet.add(c.studentClass.trim());
+        }
+      });
+
+      const totalPages = Math.ceil(totalCount / limit) || 1;
+
+      return res.json({
+        success: true,
+        students,
+        pagination: {
+          total: totalCount,
+          page,
+          limit,
+          totalPages,
+        },
+        classes: Array.from(classSet),
+      });
+    } catch (error: any) {
+      console.error("Error fetching teacher students:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to fetch student list",
+      });
+    }
+  }
+);
+
+/**
  * GET /api/admin/user-2fa-status?email=...
- * Admin-only lookup so the reset-2FA UI can show whether a user currently
- * has an authenticator app enrolled before offering to reset it.
+ * Admin lookup for user authenticator app status.
  */
 router.get(
   "/admin/user-2fa-status",
@@ -106,7 +273,9 @@ router.get(
   requireRole("admin"),
   async (req, res) => {
     try {
-      const email = (req.query.email as string | undefined)?.toLowerCase().trim();
+      const email = (req.query.email as string | undefined)
+        ?.toLowerCase()
+        .trim();
       if (!email) {
         return res.status(400).json({ error: "Email is required." });
       }
@@ -115,11 +284,15 @@ router.get(
         where: { email },
         select: { id: true, name: true, email: true, twoFactorEnabled: true },
       });
+
       if (!user) {
-        return res.status(404).json({ error: "No account found with that email." });
+        return res
+          .status(404)
+          .json({ error: "No account found with that email." });
       }
 
       return res.json({
+        success: true,
         user: {
           name: user.name,
           email: user.email,
@@ -132,18 +305,12 @@ router.get(
         .status(500)
         .json({ error: error?.message || "Failed to look up 2FA status." });
     }
-  },
+  }
 );
 
 /**
  * POST /api/admin/reset-2fa
- * Admin-only recovery path for a user who lost their authenticator app /
- * QR code with no backup codes. We don't (and can't safely) hand back the
- * old QR — instead this wipes the user's stored TOTP secret and flips
- * `twoFactorEnabled` back to false. The existing login flow already shows
- * a fresh QR-setup screen the next time a user with 2FA disabled signs in
- * (see AuthPage.tsx), so no other change is needed — the user just logs
- * in with their email + password and re-enrolls a new authenticator.
+ * Admin-only recovery to disable 2FA for a user.
  */
 router.post(
   "/admin/reset-2fa",
@@ -151,7 +318,9 @@ router.post(
   requireRole("admin"),
   async (req, res) => {
     try {
-      const email = (req.body?.email as string | undefined)?.toLowerCase().trim();
+      const email = (req.body?.email as string | undefined)
+        ?.toLowerCase()
+        .trim();
       if (!email) {
         return res.status(400).json({ error: "Email is required." });
       }
@@ -160,8 +329,11 @@ router.post(
         where: { email },
         select: { id: true, name: true, twoFactorEnabled: true },
       });
+
       if (!user) {
-        return res.status(404).json({ error: "No account found with that email." });
+        return res
+          .status(404)
+          .json({ error: "No account found with that email." });
       }
 
       await prisma.twoFactor.deleteMany({ where: { userId: user.id } });
@@ -180,7 +352,7 @@ router.post(
         .status(500)
         .json({ error: error?.message || "Failed to reset 2FA." });
     }
-  },
+  }
 );
 
 export default router;

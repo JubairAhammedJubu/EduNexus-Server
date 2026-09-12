@@ -13,11 +13,11 @@ const AUTH_SECRET =
   process.env.BETTER_AUTH_SECRET || "better-auth-secret-12345678901234567890";
 
 // ── "Forgot password" via authenticator app ─────────────────────────
-// Kono email/OTP pathano hoy na — user tar email + tar authenticator app
-// er 6-digit code dey (jei TOTP secret ta already 2FA login-e use hoy),
-// shothik hole ekta short-lived resetToken pai, tarpor shei token diye
-// notun password set kore. Token gulo memory-te thake (DB migration
-// lagena) — 5 minute-e expire, ar ekbar use korle shathe shathe delete.
+// No email/OTP is sent — user provides their email + their authenticator app
+// 6-digit code (the TOTP secret already used for 2FA login). If valid,
+// a short-lived resetToken is returned, which is then used to set a new password.
+// Tokens are stored in memory (no DB migration needed) — expire in 5 minutes,
+// and are deleted immediately after single use.
 const resetTickets = new Map<string, { email: string; expiresAt: number }>();
 
 function cleanupExpiredTickets() {
