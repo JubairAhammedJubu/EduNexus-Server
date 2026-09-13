@@ -77,27 +77,55 @@ export const auth = betterAuth({
         defaultValue: "student",
         input: false, // cannot be passed from client
       },
-      phone:{
+      phone: {
         type: "string",
         required: false,
       },
-        location: {
+      location: {
         type: "string",
         required: false,
       },
-      bio:{
+      department: {
         type: "string",
         required: false,
       },
-      department:{
+      bio: {
         type: "string",
         required: false,
       },
-      studentClass:{
+      fatherName: {
         type: "string",
         required: false,
       },
-      studentSection:{
+      motherName: {
+        type: "string",
+        required: false,
+      },
+      dateOfBirth: {
+        type: "string",
+        required: false,
+      },
+      address: {
+        type: "string",
+        required: false,
+      },
+      bloodGroup: {
+        type: "string",
+        required: false,
+      },
+      schoolName: {
+        type: "string",
+        required: false,
+      },
+      studentClass: {
+        type: "string",
+        required: false,
+      },
+      studentSection: {
+        type: "string",
+        required: false,
+      },
+      qualification: {
         type: "string",
         required: false,
       },
@@ -136,6 +164,8 @@ export const auth = betterAuth({
             });
           }
 
+          const rawDob = (user as any).dateOfBirth;
+
           return {
             data: {
               ...user,
@@ -144,6 +174,7 @@ export const auth = betterAuth({
               // login is not allowed until approved by an admin
               // (see hooks.before "/sign-in/email" check).
               isApproved: false,
+              ...(rawDob ? { dateOfBirth: new Date(rawDob) } : {}),
             },
           };
         },
