@@ -125,6 +125,10 @@ export const auth = betterAuth({
         type: "string",
         required: false,
       },
+      group: {
+        type: "string",
+        required: false,
+      },
       qualification: {
         type: "string",
         required: false,
