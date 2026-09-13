@@ -197,9 +197,10 @@ router.patch(
 
       return res.json({
         success: true,
-        message: status === "APPROVED"
-          ? `Request approved! Class ${existingRequest.grade} ${existingRequest.section} (${existingRequest.subject}) assigned to ${existingRequest.teacherName}.`
-          : `Request status updated to ${status}.`,
+        message:
+          status === "APPROVED"
+            ? `Request approved! Class ${existingRequest.grade} ${existingRequest.section} (${existingRequest.subject}) assigned to ${existingRequest.teacherName}.`
+            : `Request status updated to ${status}.`,
         request: updated,
       });
     } catch (error: any) {
@@ -212,4 +213,223 @@ router.patch(
   },
 );
 
+/**
+ * GET /api/student/subjects
+ *
+ * Returns approved subjects for the logged-in student's class.
+ * Optional: also filter by section.
+ */
+router.get(
+  "/student/subjects",
+  requireAuth,
+  requireRole("student"),
+  async (req, res) => {
+    try {
+      const student = await prisma.user.findUnique({
+        where: { id: req.user!.id },
+        select: {
+          studentClass: true,
+          studentSection: true,
+          department: true,
+        },
+      });
+      console.log("Fetched student info:", student);
+      if (!student?.studentClass) {
+        return res.status(400).json({
+          success: false,
+          error: "Student class is required.",
+        });
+      }
+
+      const defaultSubjectsByClass: Record<string, Record<string, string[]>> = {
+        "Class 6": {
+          General: [
+            "Bangla",
+            "English",
+            "Mathematics",
+            "Science",
+            "Bangladesh & Global Studies",
+            "Religion",
+            "ICT",
+            "Physical Education & Health",
+            "Arts & Crafts",
+          ],
+        },
+        "Class 7": {
+          General: [
+            "Bangla",
+            "English",
+            "Mathematics",
+            "Science",
+            "Bangladesh & Global Studies",
+            "Religion",
+            "ICT",
+            "Physical Education & Health",
+            "Arts & Crafts",
+          ],
+        },
+        "Class 8": {
+          General: [
+            "Bangla",
+            "English",
+            "Mathematics",
+            "Science",
+            "Bangladesh & Global Studies",
+            "Religion",
+            "ICT",
+            "Physical Education & Health",
+            "Arts & Crafts",
+          ],
+        },
+
+        "Class 9": {
+          Science: [
+            "Bangla 1st Paper",
+            "Bangla 2nd Paper",
+            "English 1st Paper",
+            "English 2nd Paper",
+            "General Mathematics",
+            "Higher Mathematics",
+            "Physics",
+            "Chemistry",
+            "Biology",
+            "ICT",
+            "Religion",
+            "Career Education",
+          ],
+          "Business Studies": [
+            "Bangla 1st Paper",
+            "Bangla 2nd Paper",
+            "English 1st Paper",
+            "English 2nd Paper",
+            "General Mathematics",
+            "Accounting",
+            "Business Entrepreneurship",
+            "Finance & Banking",
+            "ICT",
+            "Religion",
+            "Career Education",
+          ],
+          Humanities: [
+            "Bangla 1st Paper",
+            "Bangla 2nd Paper",
+            "English 1st Paper",
+            "English 2nd Paper",
+            "General Mathematics",
+            "History",
+            "Geography",
+            "Civics & Citizenship",
+            "ICT",
+            "Religion",
+            "Career Education",
+          ],
+        },
+        "Class 10": {
+          Science: [
+            "Bangla 1st Paper",
+            "Bangla 2nd Paper",
+            "English 1st Paper",
+            "English 2nd Paper",
+            "General Mathematics",
+            "Higher Mathematics",
+            "Physics",
+            "Chemistry",
+            "Biology",
+            "ICT",
+            "Religion",
+            "Career Education",
+          ],
+          "Business Studies": [
+            "Bangla 1st Paper",
+            "Bangla 2nd Paper",
+            "English 1st Paper",
+            "English 2nd Paper",
+            "General Mathematics",
+            "Accounting",
+            "Business Entrepreneurship",
+            "Finance & Banking",
+            "ICT",
+            "Religion",
+            "Career Education",
+          ],
+          Humanities: [
+            "Bangla 1st Paper",
+            "Bangla 2nd Paper",
+            "English 1st Paper",
+            "English 2nd Paper",
+            "General Mathematics",
+            "History",
+            "Geography",
+            "Civics & Citizenship",
+            "ICT",
+            "Religion",
+            "Career Education",
+          ],
+        },
+      };
+
+      const department =
+        student.department ||
+        (["Class 6", "Class 7", "Class 8"].includes(student.studentClass)
+          ? "General"
+          : "Science");
+      console.log("Student class:", student.studentClass, "Department:", department);
+      const subjectNames =
+        defaultSubjectsByClass[student.studentClass]?.[department] || [];
+
+      const approved = await prisma.classSubjectRequest.findMany({
+        where: {
+          grade: student.studentClass,
+          status: "APPROVED",
+        },
+        select: {
+          subject: true,
+          teacherName: true,
+          teacherEmail: true,
+          section: true,
+          subjectCode: true,
+          room: true,
+          schedule: true,
+          time: true,
+        },
+      });
+
+      const teacherMap = new Map(
+        approved.map((item) => [item.subject.trim().toLowerCase(), item]),
+      );
+
+      const subjects = subjectNames.map((name, index) => {
+        const matched = teacherMap.get(name.toLowerCase());
+
+        return {
+          id: `${student.studentClass}-${department}-${index}`,
+          subject: name,
+          subjectCode: matched?.subjectCode || null,
+          grade: student.studentClass,
+          section: matched?.section || student.studentSection || null,
+          department,
+          group: department,
+          teacherName: matched?.teacherName || null,
+          teacherEmail: matched?.teacherEmail || null,
+          room: matched?.room || null,
+          schedule: matched?.schedule || null,
+          time: matched?.time || null,
+          isTeacherAssigned: Boolean(matched?.teacherName),
+        };
+      });
+      console.log("Fetched student subjects:", subjects);
+      return res.json({
+        success: true,
+        count: subjects.length,
+        subjects,
+      });
+    } catch (error: any) {
+      console.error("Error fetching student subjects:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to fetch subjects",
+      });
+    }
+  },
+);
 export default router;
