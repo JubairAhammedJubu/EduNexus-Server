@@ -1,5 +1,5 @@
 import {betterAuth} from "better-auth";
-import {bearer, twoFactor} from "better-auth/plugins";
+import {twoFactor} from "better-auth/plugins";
 import {prismaAdapter} from "better-auth/adapters/prisma";
 import {APIError, createAuthMiddleware} from "better-auth/api";
 import {hashPassword} from "better-auth/crypto";
@@ -94,7 +94,6 @@ export const auth = betterAuth({
   trustedOrigins: clientOrigins,
 
   plugins: [
-    bearer(),
     // Authenticator-app (TOTP) 2FA. First successful email+password login
     // (before `user.twoFactorEnabled`) lets the client call
     // `twoFactor.enable` to get a QR code; every login after that goes
