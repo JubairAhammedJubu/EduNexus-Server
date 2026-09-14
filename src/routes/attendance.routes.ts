@@ -472,10 +472,8 @@ router.get(
   }
 );
 
-/**
- * GET /api/student/attendance/me
- *
- */
+// GET /api/student/attendance/me
+
 router.get(
   "/student/attendance/me",
   requireAuth,
