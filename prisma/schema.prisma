@@ -46,10 +46,16 @@ model User {
   address        String?
   bloodGroup     String?
   // student-only
+<<<<<<< HEAD
   schoolName     String?
   studentClass   String?
   studentSection String?
   group          String?   // "Science" | "Business Studies" | "Humanities"
+=======
+  schoolName    String?
+  studentClass  String?
+  studentSection       String?
+>>>>>>> bf4294ee430590482b4961edaa6af4039dce970e
   // teacher-only
   qualification  String?
 
