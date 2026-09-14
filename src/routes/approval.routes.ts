@@ -19,6 +19,13 @@ router.get("/approval-status", async (req, res) => {
       return res.status(400).json({ error: "Email is required." });
     }
 
+    if (
+      email === "demostudent@edunexus.std.com" ||
+      email === "demoteacher@edunexus.tchr.com"
+    ) {
+      return res.json({ isApproved: true });
+    }
+
     const user = await prisma.user.findUnique({
       where: { email },
       select: { isApproved: true },

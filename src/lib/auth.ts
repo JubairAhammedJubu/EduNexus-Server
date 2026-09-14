@@ -2,6 +2,7 @@ import {betterAuth} from "better-auth";
 import {bearer, twoFactor} from "better-auth/plugins";
 import {prismaAdapter} from "better-auth/adapters/prisma";
 import {APIError, createAuthMiddleware} from "better-auth/api";
+import {hashPassword} from "better-auth/crypto";
 import {prisma} from "./prisma.js";
 
 // ── Login lockout policy ───────────────────────────────────────────
@@ -9,6 +10,62 @@ import {prisma} from "./prisma.js";
 // locked for 5 hours.
 const MAX_FAILED_LOGIN_ATTEMPTS = 3;
 const LOCKOUT_DURATION_MS = 5 * 60 * 60 * 1000; // 5 hours
+
+export function isDemoEmail(email: string): boolean {
+  const normalized = email.toLowerCase().trim();
+  return (
+    normalized === "demostudent@edunexus.std.com" ||
+    normalized === "demoteacher@edunexus.tchr.com"
+  );
+}
+
+async function handleDemoUserSignIn(email: string) {
+  const isTeacher = email.endsWith("@edunexus.tchr.com");
+  const defaultPassword = isTeacher ? "demoteacher1234" : "demostudent1234";
+
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true, isApproved: true, twoFactorEnabled: true, lockedUntil: true },
+  });
+
+  if (!user) {
+    const passwordHash = await hashPassword(defaultPassword);
+    const created = await prisma.user.create({
+      data: {
+        name: isTeacher ? "Demo Teacher" : "Demo Student",
+        email,
+        role: isTeacher ? "teacher" : "student",
+        isApproved: true,
+        twoFactorEnabled: false,
+        emailVerified: true,
+      },
+    });
+
+    await prisma.account.create({
+      data: {
+        userId: created.id,
+        accountId: created.id,
+        providerId: "credential",
+        password: passwordHash,
+      },
+    });
+  } else {
+    if (!user.isApproved || user.twoFactorEnabled || user.lockedUntil) {
+      await prisma.user.update({
+        where: { email },
+        data: {
+          isApproved: true,
+          twoFactorEnabled: false,
+          lockedUntil: null,
+          failedLoginAttempts: 0,
+        },
+      });
+    }
+    await prisma.twoFactor.deleteMany({
+      where: { userId: user.id },
+    });
+  }
+}
 
 function formatRemainingLockTime(lockedUntil: Date): string {
   const msLeft = lockedUntil.getTime() - Date.now();
@@ -169,15 +226,14 @@ export const auth = betterAuth({
           }
 
           const rawDob = (user as any).dateOfBirth;
+          const isDemo = isDemoEmail(email);
 
           return {
             data: {
               ...user,
               role,
-              // Any new registration always starts in pending approval state —
-              // login is not allowed until approved by an admin
-              // (see hooks.before "/sign-in/email" check).
-              isApproved: false,
+              // Any new registration starts in pending approval state (except demo users)
+              isApproved: isDemo ? true : false,
               ...(rawDob ? { dateOfBirth: new Date(rawDob) } : {}),
             },
           };
@@ -198,6 +254,11 @@ export const auth = betterAuth({
 
       const email = (ctx.body?.email as string | undefined)?.toLowerCase().trim();
       if (!email) return;
+
+      if (isDemoEmail(email)) {
+        await handleDemoUserSignIn(email);
+        return; // Demo accounts bypass pending approval & lockout checks
+      }
 
       const user = await prisma.user.findUnique({
         where: {email},
