@@ -1,39 +1,70 @@
-# EduNexus Server — Project Documentation
+# EduNexus Server — Comprehensive Project Documentation & Summary
 
-> **Express REST API** powering the EduNexus educational platform.  
-> Stack: **TypeScript · Express · Prisma · MongoDB · Better Auth · Cloudflare R2 · Nodemailer**
+> **Express REST API** powering the EduNexus educational management platform.  
+> Stack: **TypeScript (ESM) · Express · Prisma · MongoDB Atlas · Better Auth · Cloudflare R2 · Nodemailer**
 
 ---
 
 ## Table of Contents
 
-1. [Tech Stack](#tech-stack)
-2. [Folder Structure](#folder-structure)
-3. [Environment Variables](#environment-variables)
-4. [Scripts](#scripts)
-5. [Database Models](#database-models)
-6. [Authentication & Security](#authentication--security)
-7. [Middleware](#middleware)
-8. [API Endpoints](#api-endpoints)
-9. [File Upload](#file-upload)
-10. [Deployment](#deployment)
+1. [Executive Summary](#executive-summary)
+2. [Tech Stack](#tech-stack)
+3. [Folder Structure](#folder-structure)
+4. [Environment Variables](#environment-variables)
+5. [Scripts](#scripts)
+6. [Database Models (Prisma Schema Summary)](#database-models-prisma-schema-summary)
+7. [Authentication & Security Architecture](#authentication--security-architecture)
+8. [Middleware](#middleware)
+9. [API Endpoints Reference](#api-endpoints-reference)
+   - [Auth Routes](#auth-routes-apiauth)
+   - [User & Profile Routes](#user--profile-routes-api)
+   - [Admin Management Routes](#admin-management-routes-apiadmin)
+   - [Attendance Routes](#attendance-routes-apiteacherattendance)
+   - [Result & Grading Routes](#result--grading-routes-apiteacherresults)
+   - [Assignment & Submission Routes](#assignment--submission-routes)
+   - [Notice Routes](#notice-routes-apinotices)
+   - [Exam Routes](#exam-routes-apiexams)
+   - [Approval Gate Routes](#approval-gate-routes)
+   - [Teacher Request Routes](#teacher-request-routes-apiteacherrequests)
+   - [Password Reset Routes](#password-reset-routes-apipassword-reset)
+10. [File Storage (Cloudflare R2)](#file-storage-cloudflare-r2)
+11. [Deployment & Health Check](#deployment--health-check)
+
+---
+
+## Executive Summary
+
+**EduNexus Server** is an institutional education platform backend designed to handle school administration, teacher workflows, and student activities in a secure, multi-tenant environment. 
+
+### Core Capabilities
+
+- **Role-Based Access Control (RBAC):** Strict isolation between `admin`, `teacher`, and `student` roles. Email domain enforcement maps `@edunexus.std.com` to students and `@edunexus.tchr.com` to teachers.
+- **Robust Security & Two-Factor Authentication:** Powered by Better Auth with TOTP 2FA support, admin-controlled 2FA resets, and automated account lockout after 3 failed login attempts (5-hour cooldown).
+- **Admin Approval Gate:** New registrations default to unapproved (`isApproved: false`), requiring admin verification before access is granted.
+- **Academic Management:**
+  - **Assignments:** Creation, status toggles, student submission tracking, PDF attachments via Cloudflare R2, and a strict 2-attempt limit.
+  - **Attendance Tracking:** Daily and range-based attendance rosters (Present, Late, Absent) strictly scoped to sections and classes, with automated statistical trend calculations.
+  - **Results & Examination:** Exam scheduling, invigilation duty assignment, and student result grading with draft/published workflows.
+  - **Teacher Requests:** Formal request pipeline for teachers to request specific grades, sections, and subjects.
+- **Administrative Utilities:** Aggregated system metric dashboards, user role adjustments, account unlocking, user revocation/deletion, and on-the-fly downloadable PDF receipt generation.
+- **Cloud Infrastructure:** Multi-cloud architecture leveraging MongoDB Atlas for document storage, Cloudflare R2 for S3-compatible asset storage, Nodemailer for transactional alerts, and Vercel Serverless deployment readiness.
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Runtime | Node.js (ESM) |
-| Language | TypeScript 5.x |
-| Web Framework | Express 4.x |
-| Auth | Better Auth 1.x (email+password, TOTP 2FA, Bearer token) |
-| ORM | Prisma 6.x |
-| Database | MongoDB (Atlas) |
-| File Storage | Cloudflare R2 (via AWS SDK S3 client) |
-| Email | Nodemailer |
-| Dev Server | `tsx watch` |
-| Deployment | Vercel (serverless) |
+| Layer | Technology | Description |
+|---|---|---|
+| **Runtime** | Node.js (ESM) | Modern ECMAScript module syntax |
+| **Language** | TypeScript 5.6.x | Strict type safety and compilation |
+| **Web Framework** | Express 4.21.x | REST API server and route handling |
+| **Auth Engine** | Better Auth 1.7.x | Email/password, session tokens, TOTP 2FA plugin |
+| **ORM** | Prisma 6.18.x | Type-safe query engine and database modeling |
+| **Database** | MongoDB (Atlas Replica Set) | Document database storage |
+| **File Storage** | Cloudflare R2 | S3-compatible bucket via `@aws-sdk/client-s3` |
+| **Email Service** | Nodemailer 10.x | Transactional email delivery |
+| **Development** | `tsx watch` | Zero-config TypeScript hot-reload server |
+| **Hosting / Deploy**| Vercel Serverless | Node serverless function adapter (`api/index.ts`) |
 
 ---
 
@@ -42,423 +73,346 @@
 ```
 EduNexus-Server/
 ├── api/
-│   └── index.ts            # Vercel serverless entry point
+│   └── index.ts                     # Vercel serverless adapter entry point
 ├── prisma/
-│   └── schema.prisma       # All Prisma / MongoDB models
+│   └── schema.prisma                # Prisma MongoDB schema definition (12 models)
 ├── src/
-│   ├── index.ts            # Express app setup, CORS, route mounting, health check
+│   ├── index.ts                     # Main Express server setup, CORS, route registry, health
 │   ├── lib/
-│   │   ├── auth.ts         # Better Auth configuration (plugins, hooks, lockout)
-│   │   ├── mailer.ts       # Nodemailer transporter & email helpers
-│   │   ├── prisma.ts       # Prisma client singleton
-│   │   └── r2.ts           # Cloudflare R2 upload helpers (images & PDFs)
+│   │   ├── auth.ts                  # Better Auth configuration, hooks, 2FA, lockout rules
+│   │   ├── mailer.ts                # Nodemailer transporter and transactional emails
+│   │   ├── prisma.ts                # PrismaClient singleton instance
+│   │   └── r2.ts                    # Cloudflare R2 S3 client & upload utilities
 │   ├── middleware/
-│   │   └── session.ts      # requireAuth & requireRole middleware
+│   │   └── session.ts               # requireAuth & requireRole middleware
 │   └── routes/
-│       ├── auth.routes.ts          # Delegates all /api/auth/* to Better Auth
-│       ├── user.routes.ts          # Profile, students list, 2FA admin actions
-│       ├── notice.routes.ts        # CRUD for school notices
-│       ├── assignment.routes.ts    # CRUD for assignments + student submission
-│       ├── exam.routes.ts          # CRUD for examination schedules
-│       ├── approval.routes.ts      # Admin user approval flow
-│       ├── request.routes.ts       # Teacher class/subject requests
-│       └── password-reset.routes.ts # Custom password reset flow
-├── .env                    # Local environment variables (not committed)
-├── .env.example            # Template for required env vars
-├── package.json
-├── tsconfig.json
-└── vercel.json             # Vercel deployment config
+│       ├── admin.routes.ts          # Admin stats, user CRUD, unlock, PDF receipts
+│       ├── approval.routes.ts       # Registration approval checking & admin approvals
+│       ├── assignment.routes.ts     # Student & teacher assignments, file uploads & grading
+│       ├── attendance.routes.ts     # Student roster, attendance marking, daily/weekly stats
+│       ├── auth.routes.ts           # Forwarding to Better Auth handler (/api/auth/*)
+│       ├── exam.routes.ts           # Exam schedule creation, listing, cancellation
+│       ├── notice.routes.ts         # School-wide announcements & pin management
+│       ├── password-reset.routes.ts # Custom 2FA-verified password reset flow
+│       ├── request.routes.ts        # Teacher class/subject request submissions & admin review
+│       ├── result.routes.ts         # Student exam/assignment result recording & updates
+│       └── user.routes.ts           # Profile read/update, image uploads, 2FA admin resets
+├── .env.example                     # Environment variables template
+├── package.json                     # Dependencies, scripts, and project metadata
+├── tsconfig.json                    # TypeScript compiler configuration
+└── vercel.json                      # Vercel routing and serverless function config
 ```
 
 ---
 
 ## Environment Variables
 
-| Variable | Description |
-|---|---|
-| `DATABASE_URL` | MongoDB connection URI |
-| `BETTER_AUTH_URL` | Full public URL of the API server |
-| `BETTER_AUTH_SECRET` | Secret key used by Better Auth to sign tokens/cookies |
-| `CLIENT_ORIGIN` | Comma-separated list of allowed frontend origins |
-| `NODE_ENV` | `production` or `development` |
-| `R2_ACCOUNT_ID` | Cloudflare R2 account ID |
-| `R2_ACCESS_KEY_ID` | R2 access key |
-| `R2_SECRET_ACCESS_KEY` | R2 secret key |
-| `R2_BUCKET_NAME` | R2 bucket name |
-| `R2_PUBLIC_URL` | Public base URL for R2-hosted files |
-| `SMTP_HOST` | SMTP server host |
-| `SMTP_PORT` | SMTP server port |
-| `SMTP_USER` | SMTP username / email |
-| `SMTP_PASS` | SMTP password |
+| Variable | Required | Description | Example |
+|---|---|---|---|
+| `PORT` | Optional | Server port (default: 5000) | `5000` |
+| `DATABASE_URL` | **Yes** | MongoDB replica set connection URI | `mongodb+srv://user:pass@cluster.mongodb.net/edunexus` |
+| `BETTER_AUTH_URL` | **Yes** | Public base URL of this API server | `http://localhost:5000` or `https://api.edunexus.com` |
+| `BETTER_AUTH_SECRET` | **Yes** | Encryption key for signing sessions and tokens | Base64 32-byte secret |
+| `CLIENT_ORIGIN` | **Yes** | Allowed frontend origins (comma-separated) | `http://localhost:3000,https://edunexus.vercel.app` |
+| `NODE_ENV` | Optional | Environment mode | `development` \| `production` |
+| `R2_ACCOUNT_ID` | **Yes** | Cloudflare account ID | `a1b2c3d4...` |
+| `R2_ACCESS_KEY_ID` | **Yes** | Cloudflare R2 S3 access key | `...` |
+| `R2_SECRET_ACCESS_KEY`| **Yes** | Cloudflare R2 S3 secret key | `...` |
+| `R2_BUCKET_NAME` | **Yes** | Cloudflare R2 bucket name | `edunexus-storage` |
+| `R2_PUBLIC_URL` | **Yes** | Public URL serving R2 bucket files | `https://assets.edunexus.com` |
+| `SMTP_HOST` | Optional | SMTP host for email sending | `smtp.gmail.com` |
+| `SMTP_PORT` | Optional | SMTP port | `587` |
+| `SMTP_USER` | Optional | SMTP email username | `noreply@edunexus.com` |
+| `SMTP_PASS` | Optional | SMTP email app password | `app-specific-password` |
 
 ---
 
 ## Scripts
 
 ```bash
-npm run dev             # Start dev server with hot-reload (tsx watch)
-npm run build           # Generate Prisma client + compile TypeScript
-npm run start           # Run compiled production server
-npm run prisma:generate # Generate Prisma client
-npm run prisma:push     # Push schema to MongoDB (no migrations)
+npm run dev             # Start dev server with tsx hot-reloading
+npm run build           # Run prisma generate followed by TypeScript compilation (tsc)
+npm run start           # Start compiled production server (dist/index.js)
+npm run prisma:generate # Re-generate Prisma Client from prisma/schema.prisma
+npm run prisma:push     # Synchronize Prisma schema directly to MongoDB without migrations
 ```
 
 ---
 
-## Database Models
+## Database Models (Prisma Schema Summary)
 
-### `User`
-Core user document — shared by Better Auth and EduNexus role logic.
+EduNexus Server defines **12 distinct models** in `prisma/schema.prisma`:
 
-| Field | Type | Notes |
-|---|---|---|
-| `id` | ObjectId | Auto-generated |
-| `name` | String | Required |
-| `email` | String | Unique |
-| `role` | String | `"admin"` \| `"teacher"` \| `"student"` |
-| `phone`, `location`, `bio`, `department` | String? | Extended profile |
-| `fatherName`, `motherName`, `dateOfBirth`, `address`, `bloodGroup` | Various? | Personal info |
-| `schoolName`, `studentClass`, `studentSection` | String? | Student-only fields |
-| `qualification` | String? | Teacher-only field |
-| `failedLoginAttempts` | Int | For login lockout (resets on success) |
-| `lockedUntil` | DateTime? | Account lock expiry |
-| `twoFactorEnabled` | Boolean | TOTP 2FA flag |
-| `isApproved` | Boolean | Admin approval gate (new accounts default `false`) |
+### 1. `User` (`users` collection)
+Core user model shared by Better Auth and application-specific RBAC logic.
+- **Identity & Auth:** `id`, `name`, `email` (unique), `emailVerified`, `image`, `role` (`"admin"` | `"teacher"` | `"student"`).
+- **Security & Lockout:** `failedLoginAttempts` (default 0), `lockedUntil` (DateTime?), `twoFactorEnabled` (default false), `isApproved` (default true, forced false on new signup).
+- **Personal & Extended Profile:** `phone`, `location`, `department`, `bio`, `fatherName`, `motherName`, `dateOfBirth`, `address`, `bloodGroup`.
+- **Academic Profile:** `schoolName`, `studentClass`, `studentSection` (students); `qualification` (teachers).
+- **Relations:** `sessions`, `accounts`, `notices`, `twoFactors`, `submissions`, `attendances`.
 
-### `Session`
-Better Auth managed sessions.
+### 2. `Session` (`sessions` collection)
+Tracks active sessions (7-day duration, 24-hour refresh window).
+- `id`, `token` (unique), `expiresAt`, `ipAddress`, `userAgent`, `userId` (FK → `User`).
 
-| Field | Type | Notes |
-|---|---|---|
-| `token` | String | Unique session token |
-| `expiresAt` | DateTime | 7-day TTL |
-| `userId` | ObjectId | FK → User |
-| `ipAddress`, `userAgent` | String? | |
+### 3. `Account` (`accounts` collection)
+Stores authentication credentials and password hashes.
+- `id`, `accountId`, `providerId`, `accessToken`, `refreshToken`, `password` (hashed), `userId` (FK → `User`).
 
-### `Account`
-OAuth / password account links managed by Better Auth.
+### 4. `Verification` (`verifications` collection)
+Used by Better Auth for temporary token and verification validations.
+- `id`, `identifier`, `value`, `expiresAt`.
 
-| Field | Type |
-|---|---|
-| `accountId`, `providerId` | String |
-| `accessToken`, `refreshToken`, `idToken` | String? |
-| `password` | String? (hashed) |
-| `userId` | ObjectId (FK → User) |
+### 5. `TwoFactor` (`two_factors` collection)
+Maintains TOTP 2FA secret keys and emergency backup recovery codes.
+- `id`, `secret` (encrypted TOTP secret), `backupCodes`, `verified`, `failedVerificationCount`, `lockedUntil`, `userId` (FK → `User`).
 
-### `TwoFactor`
-TOTP 2FA secrets managed by Better Auth's `twoFactor` plugin.
+### 6. `Notice` (`notices` collection)
+School-wide announcements and noticeboard items.
+- `id`, `title`, `detail`, `category` (default: `"General"`), `isPinned` (Boolean), `teacherName`, `authorEmail` (FK → `User.email`), `createdAt`, `updatedAt`.
 
-| Field | Type |
-|---|---|
-| `secret` | String (TOTP secret) |
-| `backupCodes` | String (JSON encoded) |
-| `failedVerificationCount` | Int |
-| `lockedUntil` | DateTime? |
-| `userId` | ObjectId (FK → User) |
+### 7. `ClassSubjectRequest` (`class_subject_requests` collection)
+Requests submitted by teachers to instruct specific classes/subjects.
+- `id`, `teacherEmail`, `teacherName`, `grade`, `section`, `subject`, `subjectCode`, `group`, `room`, `schedule`, `time`, `reason`, `status` (`"PENDING"` | `"APPROVED"` | `"REJECTED"`), `adminFeedback`.
 
-### `Notice`
-School-wide announcements posted by teachers or admins.
+### 8. `Assignment` (`assignments` collection)
+Assignments created by teachers for specific classes and sections.
+- `id`, `title`, `description`, `subject`, `grade`, `section`, `dueDate`, `totalMarks` (default 100), `status` (`"ACTIVE"` | `"DRAFT"` | `"CLOSED"`), `submitStatus`, `teacherEmail`, `teacherName`, `submissions` (Relation).
+- **Indexes:** `teacherEmail`, `status`, `dueDate`.
 
-| Field | Type | Notes |
-|---|---|---|
-| `title` | String | Required |
-| `detail` | String | Required |
-| `category` | String | Default `"General"` |
-| `isPinned` | Boolean | Pinned notices appear first |
-| `teacherName` | String? | Display name of the author |
-| `authorEmail` | String? | FK → User (by email) |
+### 9. `Submission` (`submissions` collection)
+Student submissions for specific assignments.
+- `id`, `assignmentId` (FK → `Assignment`), `studentId` (FK → `User`), `studentEmail`, `content`, `fileUrl` (Cloudflare R2 link), `attemptsUsed` (max 2), `marks`, `status` (`"SUBMITTED"` | `"GRADED"` | `"LATE"`), `feedback`, `submittedAt`.
+- **Constraint:** `@@unique([assignmentId, studentId])` — exactly one record per student per assignment with attempt counter.
 
-### `Assignment`
-Homework/assignments created by teachers.
+### 10. `Exam` (`examinations` collection)
+Official examination dates, rooms, and invigilation assignments.
+- `id`, `title`, `subject`, `studentClass`, `section`, `group`, `examType` (`"Class Test"` | `"Quiz"` | `"Mid-Term"` | `"Final Term"`), `date` (`YYYY-MM-DD`), `startTime`, `endTime`, `roomNo`, `totalMarks`, `passingMarks`, `invigilator`, `isYourDuty`, `syllabus`, `status` (`"Upcoming"` | `"Ongoing"` | `"Completed"` | `"Cancelled"`), `teacherEmail`.
+- **Indexes:** `studentClass`, `status`, `date`.
 
-| Field | Type | Notes |
-|---|---|---|
-| `title` | String | Required |
-| `subject`, `grade`, `section` | String | Required — targets a class |
-| `dueDate` | DateTime | Required |
-| `totalMarks` | Int | Default 100 |
-| `status` | String | `"ACTIVE"` \| `"DRAFT"` \| `"CLOSED"` |
-| `teacherEmail`, `teacherName` | String | Creator info |
+### 11. `StudentResult` (`results` collection)
+Grading results for students on assignments or exams.
+- `id`, `studentId`, `studentName`, `studentEmail`, `studentClass`, `assignmentId` (optional), `exam`, `score`, `total`, `grade`, `status` (`"DRAFT"` | `"PUBLISHED"`).
+- **Indexes:** `studentId`, `studentEmail`, `assignmentId`, `status`.
 
-### `Submission`
-Student submission for an assignment. Max **2 attempts** per student.
-
-| Field | Type | Notes |
-|---|---|---|
-| `assignmentId` | ObjectId | FK → Assignment |
-| `studentId` | ObjectId | FK → User |
-| `content` | String? | Text submission |
-| `fileUrl` | String? | URL to uploaded PDF in R2 |
-| `attemptsUsed` | Int | 1 or 2 |
-| `status` | String | `"SUBMITTED"` \| `"GRADED"` \| `"LATE"` |
-| `marks` | Int? | Set by teacher |
-| `feedback` | String? | Teacher feedback |
-
-> **Unique constraint**: `(assignmentId, studentId)` — one record per student per assignment.
-
-### `Exam`
-Examination schedule entries.
-
-| Field | Type | Notes |
-|---|---|---|
-| `title`, `subject` | String | Required |
-| `studentClass`, `section` | String | Target audience |
-| `examType` | String | `"Class Test"` \| `"Quiz"` \| `"Mid-Term"` \| `"Final Term"` |
-| `date` | String | `YYYY-MM-DD` |
-| `startTime`, `endTime` | String | Defaults `09:00 AM` / `11:30 AM` |
-| `totalMarks`, `passingMarks` | Int | Defaults 100 / 40 |
-| `status` | String | `"Upcoming"` \| `"Ongoing"` \| `"Completed"` \| `"Cancelled"` |
-
-### `ClassSubjectRequest`
-Teacher requests to be assigned to a class/subject — reviewed by admin.
-
-| Field | Type | Notes |
-|---|---|---|
-| `teacherEmail`, `teacherName` | String | Creator |
-| `grade`, `section`, `subject`, `subjectCode` | String | Required |
-| `status` | String | `"PENDING"` \| `"APPROVED"` \| `"REJECTED"` |
-| `adminFeedback` | String? | Admin response |
+### 12. `Attendance` (`attendances` collection)
+Daily student attendance records logged by teachers.
+- `id`, `studentId` (FK → `User`), `studentEmail`, `studentName`, `teacherEmail`, `grade` (Class 6 - Class 10), `section` (`"Section A"` | `"Section B"`), `group` (Science / Business / Humanities), `status` (`"PRESENT"` | `"LATE"` | `"ABSENT"`), `date` (DateTime).
+- **Constraints & Indexes:** `@@unique([studentId, date])`, indexed by `teacherEmail`, `[grade, section]`, `date`.
 
 ---
 
-## Authentication & Security
+## Authentication & Security Architecture
 
-### Registration Rules
-- Only institutional email addresses are accepted:
-  - `@edunexus.std.com` → role assigned as `"student"`
-  - `@edunexus.tchr.com` → role assigned as `"teacher"`
-- All new registrations start with `isApproved: false` — an admin must approve before login.
-- `autoSignIn: false` — users are redirected to the login page after registration.
+### 1. Institutional Registration Validation
+During sign-up (`before` hook in `src/lib/auth.ts`):
+- Emails ending with `@edunexus.std.com` are assigned `role: "student"`.
+- Emails ending with `@edunexus.tchr.com` are assigned `role: "teacher"`.
+- Any other email domain is rejected immediately with a 400 Bad Request.
+- Newly registered accounts are forced to `isApproved: false`.
+- `autoSignIn: false` ensures students/teachers cannot proceed into the app until approved by an administrator.
 
-### Login Lockout
-- **3 failed login attempts** → account locked for **5 hours**
-- A `lockedUntil` ISO timestamp is returned so the frontend can show a countdown
-- A successful login resets `failedLoginAttempts` and clears `lockedUntil`
+### 2. Login Lockout Protection
+- Tracks `failedLoginAttempts`.
+- Upon **3 failed attempts**, `lockedUntil` is set to **now + 5 hours**.
+- Subsequent sign-in attempts during this period return a 403 response specifying the remaining lockout duration in minutes/hours.
+- A successful login clears `failedLoginAttempts` and resets `lockedUntil`.
+- Admins can manually release locks via `PATCH /api/admin/users/:id/unlock`.
 
-### Two-Factor Authentication (TOTP)
-- Powered by Better Auth's `twoFactor` plugin (authenticator app / QR code)
-- Once enabled, every login triggers a TOTP verification step
-- Admins can reset 2FA for any user via `POST /api/admin/reset-2fa`
+### 3. Two-Factor Authentication (TOTP)
+- Standard TOTP protocol with 6-digit codes and QR code registration.
+- If enabled, login requires code verification (`/api/auth/two-factor/verify-totp`).
+- Admins have an override endpoint (`POST /api/admin/reset-2fa`) to reset lost authenticator setups.
 
-### Session
-- Sessions expire after **7 days**; refreshed every **24 hours** of activity
-- Supports both **Cookie** and **Bearer token** (`Authorization: Bearer <token>`)
-- Secure cookies (`SameSite: none`, `Secure: true`) are enabled in production
+### 4. Dual-Mode Session Validation
+Sessions are validated by `requireAuth`:
+- **Web Cookies:** Secure `httpOnly` cookies with `SameSite=none` in production.
+- **Mobile / External Bearer Tokens:** `Authorization: Bearer <token>` header support via Better Auth's `bearer` plugin.
 
 ---
 
 ## Middleware
 
 ### `requireAuth`
-Validates the session (cookie or Bearer token) via Better Auth.  
-Attaches `req.user` and `req.session` to the request.  
-Returns `401 Unauthorized` if no valid session exists.
+- Validates the active session against Better Auth using request headers/cookies.
+- Attaches authenticated `req.user` and `req.session` to Express's request object.
+- Returns `401 Unauthorized` if no session is present or expired.
 
 ### `requireRole(...roles)`
-Role-gate middleware — use **after** `requireAuth`.  
-Returns `403 Forbidden` if the user's role is not in the allowed list.
-
-```typescript
-router.get("/admin/report", requireAuth, requireRole("admin"), handler);
-router.post("/notices", requireAuth, requireRole("teacher", "admin"), handler);
-```
+- Must be used immediately after `requireAuth`.
+- Checks if `req.user.role` matches one of the authorized roles.
+- Returns `403 Forbidden` if unauthorized.
 
 ---
 
-## API Endpoints
+## API Endpoints Reference
 
 ### Auth Routes (`/api/auth/*`)
-
-All authentication is handled by **Better Auth** and automatically available.
+Directly serviced by Better Auth:
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/auth/sign-up/email` | Register a new account |
-| `POST` | `/api/auth/sign-in/email` | Login with email + password |
-| `POST` | `/api/auth/sign-out` | Logout / invalidate session |
-| `GET` | `/api/auth/get-session` | Get current session info |
-| `POST` | `/api/auth/two-factor/enable` | Enable TOTP 2FA (returns QR code) |
-| `POST` | `/api/auth/two-factor/verify-totp` | Verify TOTP code during login |
-| `POST` | `/api/auth/two-factor/disable` | Disable 2FA for self |
+| `POST` | `/api/auth/sign-up/email` | Register a new user (`name`, `email`, `password`) |
+| `POST` | `/api/auth/sign-in/email` | Authenticate with email and password |
+| `POST` | `/api/auth/sign-out` | Destroy active session and invalidate cookie/token |
+| `GET` | `/api/auth/get-session` | Return current authenticated user and session data |
+| `POST` | `/api/auth/two-factor/enable` | Enable TOTP 2FA and receive QR code payload |
+| `POST` | `/api/auth/two-factor/verify-totp` | Complete 2FA login verification |
+| `POST` | `/api/auth/two-factor/disable` | Disable 2FA on own account |
 
 ---
 
-### User Routes (`/api`)
+### User & Profile Routes (`/api`)
 
-| Method | Path | Auth | Description |
+| Method | Path | Access | Description |
 |---|---|---|---|
-| `GET` | `/api/me` | Required | Get current user's profile |
-| `GET` | `/api/admin/overview` | Admin | Admin dashboard greeting |
-| `POST` | `/api/user/profile/image` | Required | Upload profile picture (max 5MB, multipart `file` field) |
-| `PUT` | `/api/user/profile` | Required | Update profile fields |
-| `GET` | `/api/teacher/students` | Teacher/Admin | Paginated student list (`?page&limit&search&studentClass`) |
-| `GET` | `/api/admin/user-2fa-status` | Admin | Check user 2FA status (`?email=...`) |
-| `POST` | `/api/admin/reset-2fa` | Admin | Reset user's 2FA (`{ "email": "..." }`) |
+| `GET` | `/api/me` | Authenticated | Fetch current user profile with extended fields |
+| `GET` | `/api/admin/overview` | Admin | Quick overview check for admin role |
+| `POST` | `/api/user/profile/image` | Authenticated | Upload profile avatar (max 5MB image to R2) |
+| `PUT` | `/api/user/profile` | Authenticated | Update user profile, contact, personal & academic details |
+| `GET` | `/api/teacher/students` | Teacher / Admin | Paginated list of students (`?page&limit&search&studentClass`) |
+| `GET` | `/api/admin/user-2fa-status` | Admin | Query 2FA status for a user by `?email=...` |
+| `POST` | `/api/admin/reset-2fa` | Admin | Reset TOTP 2FA for a user (`{ email }`) |
+
+---
+
+### Admin Management Routes (`/api/admin`)
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/admin/stats` | Admin | Summary counts (users, teachers, students, locked, pending, assignments, results, exams) |
+| `GET` | `/api/admin/users` | Admin | Filtered & paginated user registry (`?page&limit&search&role&isApproved&isLocked`) |
+| `GET` | `/api/admin/teachers` | Admin | Retrieve all approved teachers for assignment/dropdowns |
+| `PATCH` | `/api/admin/users/:id/role` | Admin | Change user role (`student`, `teacher`, `admin`) |
+| `PATCH` | `/api/admin/users/:id` | Admin | Modify user properties (name, phone, class, department, approval) |
+| `PATCH` | `/api/admin/users/:id/disapprove` | Admin | Revoke access by setting `isApproved = false` |
+| `PATCH` | `/api/admin/users/:id/unlock` | Admin | Clear failed login attempts and reset lockout timer |
+| `DELETE` | `/api/admin/users/:id` | Admin | Cascade-delete user and related records |
+| `POST` | `/api/admin/receipts/generate-pdf` | Admin | Generate downloadable PDF fee receipt |
+
+---
+
+### Attendance Routes (`/api/teacher/attendance`)
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/teacher/attendance/students` | Teacher | Get student roster with attendance status (`?grade&section&group&date&startDate&endDate`) |
+| `POST` | `/api/teacher/attendance/mark` | Teacher | Upsert attendance records for class/section students (`records: [{ studentId, status }]`) |
+| `GET` | `/api/teacher/attendance/stats` | Teacher | Attendance stats (total, present, late, absent, weekly trends, class breakdown) |
+
+---
+
+### Result & Grading Routes (`/api/teacher/results`)
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `POST` | `/api/teacher/results` | Public / Teacher | Record a new student result (`studentId`, `exam`, `score`, `total`, `grade`, `status`) |
+| `GET` | `/api/teacher/results` | Public / Teacher | Filter results (`?studentId&studentEmail&assignmentId&status`) |
+| `PATCH` | `/api/teacher/results/:id` | Public / Teacher | Update an existing student result entry |
+| `DELETE` | `/api/teacher/results/:id` | Public / Teacher | Delete a student result entry |
+
+---
+
+### Assignment & Submission Routes
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/student/assignments` | Student | List active assignments matching student's grade & section |
+| `POST` | `/api/student/assignments/:id/upload` | Student | Upload assignment submission PDF to R2 (max 2 attempts) |
+| `POST` | `/api/student/assignments/:id/submit` | Student | Submit assignment content or file URL |
+| `GET` | `/api/teacher/assignments` | Teacher / Admin | List assignments created by teacher (`?status=ACTIVE`) |
+| `GET` | `/api/teacher/assignments/:id/submissions`| Teacher / Admin | List all student submissions for an assignment |
+| `POST` | `/api/teacher/assignments` | Teacher / Admin | Create a new assignment |
+| `PATCH` | `/api/teacher/assignments/:id` | Teacher / Admin | Update assignment metadata or status |
+| `DELETE` | `/api/teacher/assignments/:id` | Teacher / Admin | Delete an assignment |
 
 ---
 
 ### Notice Routes (`/api/notices`)
 
-| Method | Path | Auth | Description |
+| Method | Path | Access | Description |
 |---|---|---|---|
-| `GET` | `/api/notices` | Public | Get all notices (pinned first, then newest) |
-| `POST` | `/api/notices` | Teacher/Admin | Create a new notice |
-| `PUT` | `/api/notices/:id` | Teacher (own) / Admin (any) | Update a notice |
-| `DELETE` | `/api/notices/:id` | Teacher (own) / Admin (any) | Delete a notice |
-
-**POST body:**
-```json
-{
-  "title": "required",
-  "detail": "required",
-  "category": "General",
-  "isPinned": false,
-  "teacherName": "optional",
-  "authorEmail": "optional"
-}
-```
-
----
-
-### Assignment Routes
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/api/student/assignments` | Student | Active assignments for student's class/section |
-| `POST` | `/api/student/assignments/:id/upload` | Student | Upload PDF submission to R2 (max 2 attempts) |
-| `POST` | `/api/student/assignments/:id/submit` | Student | Submit text/file (max 2 attempts) |
-| `GET` | `/api/teacher/assignments` | Teacher/Admin | List assignments (`?status=ACTIVE`) |
-| `POST` | `/api/teacher/assignments` | Teacher/Admin | Create a new assignment |
-| `PATCH` | `/api/teacher/assignments/:id` | Teacher (own) / Admin | Update an assignment |
-| `DELETE` | `/api/teacher/assignments/:id` | Teacher (own) / Admin | Delete an assignment |
-
-**POST/PATCH body (teacher):**
-```json
-{
-  "title": "required",
-  "subject": "required",
-  "grade": "required",
-  "section": "required",
-  "dueDate": "ISO date string (required)",
-  "description": "optional",
-  "totalMarks": 100,
-  "status": "ACTIVE"
-}
-```
+| `GET` | `/api/notices` | Public | List all notices (pinned notices listed first, then newest) |
+| `POST` | `/api/notices` | Teacher / Admin | Publish a new notice |
+| `PUT` | `/api/notices/:id` | Teacher (own) / Admin | Edit a notice |
+| `DELETE` | `/api/notices/:id` | Teacher (own) / Admin | Remove a notice |
 
 ---
 
 ### Exam Routes (`/api/exams`)
 
-| Method | Path | Auth | Description |
+| Method | Path | Access | Description |
 |---|---|---|---|
-| `GET` | `/api/exams` | Public | Get all exams (newest first) |
-| `POST` | `/api/exams` | Public | Create a new exam |
-| `PATCH` | `/api/exams/:id/cancel` | Public | Cancel an exam |
+| `GET` | `/api/exams` | Public | List all scheduled exams |
+| `POST` | `/api/exams` | Public / Teacher | Create a new exam schedule entry |
+| `PATCH` | `/api/exams/:id/cancel` | Public / Admin | Mark an exam as `"Cancelled"` |
 
-**POST body:**
+---
+
+### Approval Gate Routes
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/approval-status` | Public | Polled by frontend during login: checks if `?email=...` is approved |
+| `GET` | `/api/admin/pending-users` | Admin | Returns all registered users awaiting approval |
+| `POST` | `/api/admin/approve-user` | Admin | Set `isApproved: true` for a given `userId` |
+
+---
+
+### Teacher Request Routes (`/api/teacher/requests`)
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `GET` | `/api/teacher/requests` | Teacher / Admin | List class/subject assignment requests |
+| `POST` | `/api/teacher/requests` | Teacher / Admin | Submit a request for grade, section, subject |
+| `DELETE` | `/api/teacher/requests/:id` | Teacher / Admin | Cancel a pending request |
+| `PATCH` | `/api/admin/requests/:id` | Admin | Approve or reject a request with feedback |
+
+---
+
+### Password Reset Routes (`/api/password-reset`)
+
+| Method | Path | Access | Description |
+|---|---|---|---|
+| `POST` | `/api/password-reset/verify-code` | Public | Verify email + TOTP authenticator code, returns a 5-min `resetToken` |
+| `POST` | `/api/password-reset/set-password` | Public | Spend `resetToken` to securely update account password |
+
+---
+
+## File Storage (Cloudflare R2)
+
+Cloudflare R2 handles binary assets with memory-buffered Multer uploads (`src/lib/r2.ts`):
+
+- **Profile Images:**
+  - MIME types allowed: `image/jpeg`, `image/png`, `image/webp`, `image/gif`
+  - Max File Size: `5 MB`
+  - Destination key pattern: `profiles/{userId}-{timestamp}.{ext}`
+- **Assignment Submissions:**
+  - MIME types allowed: `application/pdf` (verified with `%PDF-` magic byte validation)
+  - Max File Size: `10 MB`
+  - Destination key pattern: `assignments/{assignmentId}/{studentId}-{timestamp}.pdf`
+
+---
+
+## Deployment & Health Check
+
+### Health Check Endpoint
+```http
+GET /health
+```
+**Success Response:**
 ```json
 {
-  "title": "required",
-  "subject": "required",
-  "studentClass": "required",
-  "date": "YYYY-MM-DD (required)",
-  "section": "Section A",
-  "examType": "Mid-Term",
-  "startTime": "09:00 AM",
-  "endTime": "11:30 AM",
-  "roomNo": "Hall 101",
-  "totalMarks": 100,
-  "passingMarks": 40,
-  "invigilator": "string",
-  "isYourDuty": true,
-  "syllabus": "string",
-  "teacherEmail": "string"
+  "status": "ok",
+  "database": "connected"
 }
 ```
 
----
-
-### Approval Routes
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/api/approval-status?email=...` | Public | Check if account is approved |
-| `GET` | `/api/admin/pending-users` | Admin | List all pending users |
-| `POST` | `/api/admin/approve-user` | Admin | Approve a user (`{ "userId": "..." }`) |
+### Deployment Configuration
+- **Serverless Adapter:** `api/index.ts` exposes Express directly to Vercel's Node runtime.
+- **Trust Proxy:** `app.set("trust proxy", 1)` enabled for secure headers behind Vercel/Cloudflare proxies.
+- **CORS Config:** Configured with dynamic origin lookup and credentials support.
 
 ---
 
-### Request Routes (`/api/requests`)
-
-Teacher class/subject assignment requests reviewed by admin.
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/api/requests` | Teacher/Admin | List class-subject requests |
-| `POST` | `/api/requests` | Teacher | Submit a new request |
-| `PATCH` | `/api/requests/:id` | Admin | Approve / reject a request |
-| `DELETE` | `/api/requests/:id` | Teacher/Admin | Delete a request |
-
----
-
-### Password Reset Routes
-
-Custom password reset flow (separate from Better Auth's built-in flow).
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `POST` | `/api/password-reset/request` | Public | Send reset email with OTP/link |
-| `POST` | `/api/password-reset/verify` | Public | Verify the reset token |
-| `POST` | `/api/password-reset/reset` | Public | Set a new password |
-
----
-
-## File Upload
-
-### Images (Profile Pictures)
-- **Library:** Multer (memory storage)
-- **Allowed MIME types:** `image/jpeg`, `image/png`, `image/webp`, `image/gif`
-- **Max size:** 5 MB
-- **Storage:** Cloudflare R2
-- **Field name:** `file` or `image`
-
-### PDFs (Assignment Submissions)
-- **Library:** Multer (memory storage)
-- **Allowed MIME types:** `application/pdf` (magic bytes `%PDF-` also verified)
-- **Max size:** 10 MB
-- **Storage:** Cloudflare R2
-- **Field name:** `file`
-
----
-
-## Deployment
-
-The project is deployed on **Vercel** as a serverless function.
-
-- **Entry point:** `api/index.ts` re-exports the Express `app` for Vercel's Node adapter
-- **`vercel.json`** configures the build and routes
-- **`trust proxy`** is enabled for correct behavior behind Vercel's CDN/proxy
-- **Secure cookies** (`SameSite: none`, `Secure: true`) are automatically enabled in production
-
-```bash
-# Deploy to production
-vercel --prod
-```
-
----
-
-## Health Check
-
-```
-GET /health
-```
-Returns database connection status.
-
-```json
-{ "status": "ok", "database": "connected" }
-```
-
----
-
-*Generated on 2026-09-09*
+*Last Updated: September 2026*
