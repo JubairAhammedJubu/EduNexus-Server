@@ -496,13 +496,8 @@ router.get(
   }
 );
 
-/**
+/*
  * GET /api/student/attendance/me/summary
- *
- * Present/Absent/Late totals + percentages across the student's full
- * record, plus the same "at-risk" flag the teacher roster view uses
- * (>=3 recorded days and under 75% present-or-late), so the student
- * dashboard can surface the same signal the teacher sees.
  */
 router.get(
   "/student/attendance/me/summary",
