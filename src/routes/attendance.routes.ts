@@ -472,5 +472,87 @@ router.get(
   }
 );
 
-export default router;
+/**
+ * GET /api/student/attendance/me
+ *
+ */
+router.get(
+  "/student/attendance/me",
+  requireAuth,
+  requireRole("student"),
+  async (req, res) => {
+    try {
+      const records = await prisma.attendance.findMany({
+        where: { studentId: req.user!.id },
+        orderBy: { date: "desc" },
+      });
 
+      return res.json({ success: true, records });
+    } catch (error: any) {
+      console.error("Error fetching student attendance:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to fetch attendance",
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/student/attendance/me/summary
+ *
+ * Present/Absent/Late totals + percentages across the student's full
+ * record, plus the same "at-risk" flag the teacher roster view uses
+ * (>=3 recorded days and under 75% present-or-late), so the student
+ * dashboard can surface the same signal the teacher sees.
+ */
+router.get(
+  "/student/attendance/me/summary",
+  requireAuth,
+  requireRole("student"),
+  async (req, res) => {
+    try {
+      const records = await prisma.attendance.findMany({
+        where: { studentId: req.user!.id },
+        select: { status: true },
+      });
+
+      const total = records.length;
+      const counts = { PRESENT: 0, ABSENT: 0, LATE: 0 };
+      for (const r of records) {
+        if (r.status in counts) counts[r.status as keyof typeof counts] += 1;
+      }
+
+      const toPercent = (count: number) => (total === 0 ? 0 : Math.round((count / total) * 100));
+
+      // Matches the teacher roster's own attendance-rate definition:
+      // PRESENT and LATE both count as "attended" for the rate.
+      const attendanceRate =
+        total > 0 ? Math.round(((counts.PRESENT + counts.LATE) / total) * 100) : 100;
+      const isAtRisk = total >= 3 && attendanceRate < 75;
+
+      return res.json({
+        success: true,
+        summary: {
+          total,
+          present: counts.PRESENT,
+          absent: counts.ABSENT,
+          late: counts.LATE,
+          presentPercent: toPercent(counts.PRESENT),
+          absentPercent: toPercent(counts.ABSENT),
+          latePercent: toPercent(counts.LATE),
+          attendanceRate,
+          isAtRisk,
+        },
+      });
+    } catch (error: any) {
+      console.error("Error summarizing student attendance:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to summarize attendance",
+      });
+    }
+  }
+);
+
+export default router;
