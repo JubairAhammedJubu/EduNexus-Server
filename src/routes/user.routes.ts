@@ -124,6 +124,7 @@ router.put("/user/profile", requireAuth, async (req, res) => {
       schoolName,
       studentClass,
       studentSection,
+      group,
       qualification,
     } = req.body;
 
@@ -154,6 +155,9 @@ router.put("/user/profile", requireAuth, async (req, res) => {
         }),
         ...(studentSection !== undefined && {
           studentSection: studentSection.trim(),
+        }),
+        ...(group !== undefined && {
+          group: typeof group === "string" ? group.trim() : group,
         }),
         ...(qualification !== undefined && {
           qualification: qualification.trim(),
@@ -189,6 +193,7 @@ router.get(
       const limit = Math.max(1, parseInt(req.query.limit as string) || 20);
       const search = ((req.query.search as string) || "").trim();
       const studentClass = ((req.query.studentClass as string) || "").trim();
+      const group = ((req.query.group as string) || "").trim();
 
       const where: any = { role: "student" };
 
@@ -199,12 +204,20 @@ router.get(
         };
       }
 
+      if (group && group !== "All" && group !== "All Groups") {
+        where.group = {
+          contains: group,
+          mode: "insensitive",
+        };
+      }
+
       if (search) {
         where.OR = [
           { name: { contains: search, mode: "insensitive" } },
           { email: { contains: search, mode: "insensitive" } },
           { studentClass: { contains: search, mode: "insensitive" } },
           { studentSection: { contains: search, mode: "insensitive" } },
+          { group: { contains: search, mode: "insensitive" } },
           { department: { contains: search, mode: "insensitive" } },
         ];
       }
@@ -221,11 +234,18 @@ router.get(
         }),
       ]);
 
-      const distinctClasses = await prisma.user.findMany({
-        where: { role: "student", studentClass: { not: null } },
-        select: { studentClass: true },
-        distinct: ["studentClass"],
-      });
+      const [distinctClasses, distinctGroups] = await Promise.all([
+        prisma.user.findMany({
+          where: { role: "student", studentClass: { not: null } },
+          select: { studentClass: true },
+          distinct: ["studentClass"],
+        }),
+        prisma.user.findMany({
+          where: { role: "student", group: { not: null } },
+          select: { group: true },
+          distinct: ["group"],
+        }),
+      ]);
 
       const defaultClasses = [
         "All Classes",
@@ -242,6 +262,19 @@ router.get(
         }
       });
 
+      const defaultGroups = [
+        "All Groups",
+        "Science",
+        "Business Studies",
+        "Humanities",
+      ];
+      const groupSet = new Set<string>(defaultGroups);
+      distinctGroups.forEach((g) => {
+        if (g.group && g.group.trim()) {
+          groupSet.add(g.group.trim());
+        }
+      });
+
       const totalPages = Math.ceil(totalCount / limit) || 1;
 
       return res.json({
@@ -254,6 +287,7 @@ router.get(
           totalPages,
         },
         classes: Array.from(classSet),
+        groups: Array.from(groupSet),
       });
     } catch (error: any) {
       console.error("Error fetching teacher students:", error);

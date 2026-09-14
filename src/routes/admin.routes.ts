@@ -155,6 +155,7 @@ router.get("/admin/users", ...adminOnly, async (req, res) => {
           lockedUntil: true,
           studentClass: true,
           studentSection: true,
+          group: true,
           qualification: true,
           createdAt: true,
           updatedAt: true,
@@ -266,6 +267,7 @@ router.patch("/admin/users/:id", ...adminOnly, async (req, res) => {
       qualification,
       studentClass,
       studentSection,
+      group,
       isApproved,
     } = req.body;
 
@@ -276,6 +278,7 @@ router.patch("/admin/users/:id", ...adminOnly, async (req, res) => {
     if (qualification !== undefined) data.qualification = qualification;
     if (studentClass !== undefined) data.studentClass = studentClass;
     if (studentSection !== undefined) data.studentSection = studentSection;
+    if (group !== undefined) data.group = group;
     if (isApproved !== undefined) data.isApproved = Boolean(isApproved);
 
     const user = await prisma.user.update({
@@ -291,6 +294,7 @@ router.patch("/admin/users/:id", ...adminOnly, async (req, res) => {
         qualification: true,
         studentClass: true,
         studentSection: true,
+        group: true,
         isApproved: true,
       },
     });
