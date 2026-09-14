@@ -3,12 +3,13 @@ import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
 
 const router = Router();
+const teacherOrAdmin = [requireAuth, requireRole("teacher", "admin")];
 
 /**
  * POST /api/teacher/results
  * Create a student result
  */
-router.post("/teacher/results", async (req, res) => {
+router.post("/teacher/results", ...teacherOrAdmin, async (req, res) => {
   try {
     const {
       studentId,
@@ -108,7 +109,7 @@ router.post("/teacher/results", async (req, res) => {
  * ?status=PUBLISHED
  * ?assignmentId=assignment-id
  */
-router.get("/teacher/results", async (req, res) => {
+router.get("/teacher/results", ...teacherOrAdmin, async (req, res) => {
   try {
     const { studentEmail, status, assignmentId } = req.query;
 
@@ -146,7 +147,7 @@ router.get("/teacher/results", async (req, res) => {
     });
   }
 });
-router.delete("/teacher/results/:id", async (req, res) => {
+router.delete("/teacher/results/:id", ...teacherOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -186,7 +187,7 @@ router.delete("/teacher/results/:id", async (req, res) => {
   }
 });
 
-router.patch("/teacher/results/:id", async (req, res) => {
+router.patch("/teacher/results/:id", ...teacherOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -306,7 +307,7 @@ router.get(
           updatedAt: true,
         },
       });
-      console.log("Fetched student results:", results);
+
       return res.json({
         success: true,
         count: results.length,

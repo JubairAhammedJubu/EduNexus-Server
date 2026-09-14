@@ -233,7 +233,7 @@ router.get(
           department: true,
         },
       });
-      console.log("Fetched student info:", student);
+
       if (!student?.studentClass) {
         return res.status(400).json({
           success: false,
@@ -373,7 +373,6 @@ router.get(
         (["Class 6", "Class 7", "Class 8"].includes(student.studentClass)
           ? "General"
           : "Science");
-      console.log("Student class:", student.studentClass, "Department:", department);
       const subjectNames =
         defaultSubjectsByClass[student.studentClass]?.[department] || [];
 
@@ -381,6 +380,7 @@ router.get(
         where: {
           grade: student.studentClass,
           status: "APPROVED",
+          section: student.studentSection || undefined,
         },
         select: {
           subject: true,
@@ -417,7 +417,6 @@ router.get(
           isTeacherAssigned: Boolean(matched?.teacherName),
         };
       });
-      console.log("Fetched student subjects:", subjects);
       return res.json({
         success: true,
         count: subjects.length,
@@ -432,4 +431,5 @@ router.get(
     }
   },
 );
+
 export default router;
