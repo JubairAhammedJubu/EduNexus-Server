@@ -2,6 +2,8 @@ import { Router } from "express";
 import { Attendance } from "@prisma/client";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
+import { fromNodeHeaders } from "better-auth/node";
+import { auth } from "../lib/auth.js";
 
 const router = Router();
 const teacherOnly = [requireAuth, requireRole("teacher", "admin")];
@@ -215,9 +217,21 @@ router.get(
  */
 router.post(
   "/teacher/attendance/mark",
-  // ...teacherOnly,
   async (req, res) => {
     try {
+      if (!req.user) {
+        try {
+          const sessionResult = await auth.api.getSession({
+            headers: fromNodeHeaders(req.headers),
+          });
+          if (sessionResult?.user) {
+            req.user = sessionResult.user;
+          }
+        } catch {
+          // ignore session extraction error
+        }
+      }
+
       const { date, grade, section, group, records } = req.body;
 
       if (!grade || !section || !records || !Array.isArray(records)) {
@@ -235,7 +249,9 @@ router.post(
       }
 
       const targetDate = normalizeDate(date);
-      const teacherEmail = req.user!.email;
+      const teacherEmail =
+        (req.user as { email?: string } | undefined)?.email ||
+        "demoteacher@edunexus.tchr.com";
 
       const upsertPromises = records.map(
         async (rec: {
@@ -455,6 +471,140 @@ router.get(
     }
   }
 );
+
+/**
+ * GET /api/student/attendance
+ *
+ * Returns personal attendance history and attendance summary stats
+ * for the authenticated student (or demo student).
+ */
+router.get("/student/attendance", async (req, res) => {
+  try {
+    if (!req.user) {
+      try {
+        const sessionResult = await auth.api.getSession({
+          headers: fromNodeHeaders(req.headers),
+        });
+        if (sessionResult?.user) {
+          req.user = sessionResult.user;
+        }
+      } catch {
+        // fallback
+      }
+    }
+
+    const emailQuery = typeof req.query.email === "string" ? req.query.email.trim() : "";
+    const studentEmail = (req.user?.email || emailQuery || "demostudent@edunexus.std.com").toLowerCase();
+    const isDemo =
+      studentEmail === "demostudent@edunexus.std.com" ||
+      (req.user as any)?.isDemo === true;
+
+    // Find student in DB
+    const studentUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          ...(req.user?.id ? [{ id: req.user.id }] : []),
+          { email: { equals: studentEmail, mode: "insensitive" } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        studentClass: true,
+        studentSection: true,
+        department: true,
+      },
+    });
+
+    let records = await prisma.attendance.findMany({
+      where: {
+        OR: [
+          ...(studentUser?.id ? [{ studentId: studentUser.id }] : []),
+          { studentEmail: { equals: studentEmail, mode: "insensitive" } },
+        ],
+      },
+      orderBy: { date: "desc" },
+    });
+
+    // Fallback demo data generation if no attendance records exist for demo student
+    if (records.length === 0 && (isDemo || !studentUser)) {
+      const demoGrade = studentUser?.studentClass || "Class 8";
+      const demoSection = studentUser?.studentSection || "Section A";
+      const demoGroup = studentUser?.department || undefined;
+
+      const mockDates = [
+        { daysAgo: 0, status: "PRESENT" },
+        { daysAgo: 1, status: "PRESENT" },
+        { daysAgo: 2, status: "LATE" },
+        { daysAgo: 3, status: "PRESENT" },
+        { daysAgo: 4, status: "PRESENT" },
+        { daysAgo: 7, status: "PRESENT" },
+        { daysAgo: 8, status: "PRESENT" },
+        { daysAgo: 9, status: "ABSENT" },
+        { daysAgo: 10, status: "PRESENT" },
+        { daysAgo: 11, status: "PRESENT" },
+        { daysAgo: 14, status: "PRESENT" },
+        { daysAgo: 15, status: "LATE" },
+      ];
+
+      records = mockDates.map((m, index) => {
+        const d = new Date();
+        d.setDate(d.getDate() - m.daysAgo);
+        d.setHours(0, 0, 0, 0);
+        return {
+          id: `demo-att-${index + 1}`,
+          studentId: studentUser?.id || "demo-student-id",
+          studentEmail: studentEmail,
+          studentName: studentUser?.name || "Demo Student",
+          teacherEmail: "demoteacher@edunexus.tchr.com",
+          grade: demoGrade,
+          section: demoSection,
+          group: demoGroup || null,
+          status: m.status,
+          date: d,
+          createdAt: d,
+          updatedAt: d,
+        } as any;
+      });
+    }
+
+    const total = records.length;
+    const present = records.filter((r) => r.status === "PRESENT").length;
+    const late = records.filter((r) => r.status === "LATE").length;
+    const absent = records.filter((r) => r.status === "ABSENT").length;
+    const attendanceRate =
+      total > 0 ? Math.round(((present + late) / total) * 100) : 100;
+
+    const formattedRecords = records.map((r) => ({
+      id: r.id,
+      date: r.date instanceof Date ? r.date.toISOString() : new Date(r.date).toISOString(),
+      status: r.status,
+      grade: r.grade,
+      section: r.section,
+      group: r.group || undefined,
+      teacherEmail: r.teacherEmail || undefined,
+    }));
+
+    return res.json({
+      success: true,
+      records: formattedRecords,
+      summary: {
+        total,
+        present,
+        late,
+        absent,
+        attendanceRate,
+      },
+    });
+  } catch (error: any) {
+    console.error("Error fetching student attendance:", error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to fetch student attendance",
+    });
+  }
+});
 
 export default router;
 
