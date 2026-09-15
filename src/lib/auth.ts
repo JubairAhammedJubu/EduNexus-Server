@@ -185,6 +185,10 @@ export const auth = betterAuth({
         type: "string",
         required: false,
       },
+      rollNumber: {
+        type: "string",
+        required: false,
+      },
       qualification: {
         type: "string",
         required: false,
@@ -224,6 +228,69 @@ export const auth = betterAuth({
             });
           }
 
+          let assignedRollNumber: string | undefined = undefined;
+
+          if (role === "student") {
+            const rawClass = (user as any).studentClass?.trim();
+            const rawSection = (user as any).studentSection?.trim();
+            const rawGroup = (user as any).group?.trim();
+
+            if (rawClass && rawSection) {
+              const cleanGrade = rawClass.replace(/(Class|Grade)\s*/i, "").trim();
+              const classCriteria = [rawClass, `Class ${cleanGrade}`, `Grade ${cleanGrade}`, cleanGrade];
+
+              const cleanSection = rawSection.replace(/Section\s*/i, "").trim();
+              const sectionCriteria = [rawSection, `Section ${cleanSection}`, cleanSection];
+
+              const groupFilter = rawGroup ? { group: rawGroup } : {};
+              const classWhere = {
+                role: { in: ["student", "STUDENT"] },
+                studentClass: { in: classCriteria },
+                ...groupFilter,
+              };
+              const sectionWhere = {
+                ...classWhere,
+                studentSection: { in: sectionCriteria },
+              };
+
+              // Section capacity check (Max 30 students per section)
+              const sectionCount = await prisma.user.count({ where: sectionWhere });
+              if (sectionCount >= 30) {
+                throw new APIError("BAD_REQUEST", {
+                  message: `${rawSection} of ${rawClass}${rawGroup ? ` (${rawGroup})` : ""} has reached maximum capacity (30 students). Please select another section.`,
+                  code: "SECTION_FULL",
+                });
+              }
+
+              // Class capacity check (Max 60 students per class / group)
+              const classCount = await prisma.user.count({ where: classWhere });
+              if (classCount >= 60) {
+                throw new APIError("BAD_REQUEST", {
+                  message: `${rawClass}${rawGroup ? ` (${rawGroup})` : ""} has reached maximum capacity (60 students).`,
+                  code: "CLASS_FULL",
+                });
+              }
+
+              // Auto-calculate next sequential roll number
+              const existingStudents = await prisma.user.findMany({
+                where: sectionWhere,
+                select: { rollNumber: true },
+              });
+
+              let maxRoll = 0;
+              for (const s of existingStudents) {
+                if (s.rollNumber) {
+                  const num = parseInt(s.rollNumber.replace(/\D/g, ""), 10);
+                  if (!isNaN(num) && num > maxRoll) {
+                    maxRoll = num;
+                  }
+                }
+              }
+
+              assignedRollNumber = (maxRoll + 1).toString();
+            }
+          }
+
           const rawDob = (user as any).dateOfBirth;
           const isDemo = isDemoEmail(email);
 
@@ -231,6 +298,7 @@ export const auth = betterAuth({
             data: {
               ...user,
               role,
+              ...(assignedRollNumber ? { rollNumber: assignedRollNumber } : {}),
               // Any new registration starts in pending approval state (except demo users)
               isApproved: isDemo ? true : false,
               ...(rawDob ? { dateOfBirth: new Date(rawDob) } : {}),
