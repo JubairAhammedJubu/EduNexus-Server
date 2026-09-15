@@ -109,7 +109,7 @@ router.post("/teacher/results", ...teacherOrAdmin, async (req, res) => {
  * ?status=PUBLISHED
  * ?assignmentId=assignment-id
  */
-router.get("/teacher/results", ...teacherOrAdmin, async (req, res) => {
+router.get("/teacher/results", requireAuth, async (req, res) => {
   try {
     const { studentEmail, status, assignmentId } = req.query;
 
@@ -274,6 +274,7 @@ router.get(
   requireAuth,
   requireRole("student"),
   async (req, res) => {
+    console.log("GET /student/results HIT");
     try {
       const studentEmail = req.user!.email.toLowerCase();
       const { exam, assignmentId } = req.query;
