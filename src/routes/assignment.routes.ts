@@ -93,7 +93,7 @@ router.get(
 
         // remove the nested array so the frontend gets a flat object
         const { submissions, ...rest } = assignment;
-        console.log(submission,rest)
+       
 
         return {
           ...rest,
