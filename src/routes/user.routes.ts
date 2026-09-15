@@ -125,6 +125,7 @@ router.put("/user/profile", requireAuth, async (req, res) => {
       studentClass,
       studentSection,
       group,
+      rollNumber,
       qualification,
     } = req.body;
 
@@ -158,6 +159,9 @@ router.put("/user/profile", requireAuth, async (req, res) => {
         }),
         ...(group !== undefined && {
           group: typeof group === "string" ? group.trim() : group,
+        }),
+        ...(rollNumber !== undefined && {
+          rollNumber: typeof rollNumber === "string" ? rollNumber.trim() : String(rollNumber),
         }),
         ...(qualification !== undefined && {
           qualification: qualification.trim(),
