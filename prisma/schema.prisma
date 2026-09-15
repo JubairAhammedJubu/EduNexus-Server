@@ -49,7 +49,8 @@ model User {
   schoolName     String?
   studentClass   String?
   studentSection String?
-   group          String?   // "Science" | "Business Studies" | "Humanities"
+  group          String?   // "Science" | "Business Studies" | "Humanities"
+  rollNumber     String?   // Auto-assigned sequential roll number
   // teacher-only
   qualification  String?
 
@@ -63,6 +64,7 @@ model User {
   submissions Submission[]
   attendances Attendance[]
 
+  @@index([studentClass, studentSection, group])
   @@map("users")
 }
 
