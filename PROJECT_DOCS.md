@@ -29,6 +29,8 @@
    - [Password Reset Routes](#password-reset-routes-apipassword-reset)
 10. [File Storage (Cloudflare R2)](#file-storage-cloudflare-r2)
 11. [Deployment & Health Check](#deployment--health-check)
+12. [Token Verification Architecture (Header-Based / No Cookies)](#token-verification-architecture-header-based--no-cookies)
+13. [Complete Code Summary & File Reference](#complete-code-summary--file-reference)
 
 ---
 
@@ -224,10 +226,10 @@ During sign-up (`before` hook in `src/lib/auth.ts`):
 - If enabled, login requires code verification (`/api/auth/two-factor/verify-totp`).
 - Admins have an override endpoint (`POST /api/admin/reset-2fa`) to reset lost authenticator setups.
 
-### 4. Dual-Mode Session Validation
-Sessions are validated by `requireAuth`:
-- **Web Cookies:** Secure `httpOnly` cookies with `SameSite=none` in production.
-- **Mobile / External Bearer Tokens:** `Authorization: Bearer <token>` header support via Better Auth's `bearer` plugin.
+### 4. Cookie-Based Session Validation
+Sessions are validated by `requireAuth` using native Better Auth session cookies:
+- **Web Cookies:** Secure `httpOnly` cookies (`better-auth.session_token`). Passed automatically by browsers with `credentials: "include"` and forwarded by Next.js Server Actions via `cookies()`.
+- **Zero Client-Side Token Handling:** No `Authorization` or `Bearer` headers needed from the frontend.
 
 ---
 
@@ -415,4 +417,140 @@ GET /health
 
 ---
 
+## Token Verification Architecture (Header-Based / No Cookies)
+
+When authenticating cross-origin, mobile apps, or clients where third-party cookies are blocked or undesirable, the server supports token-based authentication via the standard HTTP `Authorization` request header:
+
+```http
+Authorization: Bearer <token>
+```
+
+### 1. Existing Better Auth Implementation (Bearer Token)
+The server already includes the `bearer()` plugin in `src/lib/auth.ts`. 
+
+- **How Verification Works (`src/middleware/session.ts`)**:
+  ```typescript
+  export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+    // fromNodeHeaders parses req.headers including 'authorization: Bearer <token>'
+    const result = await auth.api.getSession({
+      headers: fromNodeHeaders(req.headers),
+    });
+
+    if (!result) {
+      return res.status(401).json({ status: false, code: 401, error: "Unauthorized" });
+    }
+
+    req.user = result.user;
+    req.session = result.session;
+    next();
+  }
+  ```
+- **Client Storage & Usage**:
+  When logging in (`/api/auth/sign-in/email`), Better Auth returns a session `token`. The client stores this in memory or `localStorage`:
+  ```javascript
+  // Storing token
+  localStorage.setItem("edunexus_token", data.token);
+
+  // Sending authenticated requests without cookies
+  fetch("http://localhost:5000/api/me", {
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${localStorage.getItem("edunexus_token")}`
+    }
+  });
+  ```
+
+### 2. Standalone Custom Express JWT Middleware (`jsonwebtoken`)
+If stateless JWT verification (without database session queries) is desired, standard `jsonwebtoken` middleware can be used:
+
+```typescript
+import type { Request, Response, NextFunction } from "express";
+import jwt from "jsonwebtoken";
+
+export function verifyJWT(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ success: false, error: "Unauthorized: No Bearer token" });
+  }
+
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || process.env.BETTER_AUTH_SECRET!);
+    (req as any).user = decoded;
+    next();
+  } catch (err: any) {
+    return res.status(403).json({
+      success: false,
+      error: err.name === "TokenExpiredError" ? "Token expired" : "Invalid token"
+    });
+  }
+}
+```
+
+---
+
+## Complete Code Summary & File Reference
+
+### 1. Entry Point & Server Bootstrap (`src/index.ts` & `api/index.ts`)
+- **`src/index.ts`**:
+  - Sets up Express instance, attaches `trust proxy`, and configures dynamic origin CORS.
+  - Mounts `/api/auth` handler **prior** to `express.json()` (preserving raw stream for Better Auth).
+  - Globally parses JSON payloads and mounts all `/api` route modules.
+  - Health check `GET /health` proactively executes `prisma.$connect()`.
+  - Conditional HTTP listener (`PORT || 5000`) when running in development/Node server.
+- **`api/index.ts`**:
+  - Minimal Vercel Serverless Function export wrapping `app`.
+
+### 2. Database & Data Models (`prisma/schema.prisma` & `src/lib/prisma.ts`)
+- **`src/lib/prisma.ts`**: Singleton `PrismaClient` preventing MongoDB connection pool exhaustion during hot reloads.
+- **`prisma/schema.prisma`**: Defines 12 core models:
+  - **`User`**: Account identity, roles (`student`, `teacher`, `admin`), approval flags, lockouts, TOTP, and extended academic profile info.
+  - **`Session` & `Account` & `Verification` & `TwoFactor`**: Better Auth internal collections handling tokens, credential hashes, email verification tokens, and TOTP backup keys.
+  - **`Notice`**: School-wide broadcasts with category tagging and pin-to-top support.
+  - **`ClassSubjectRequest`**: Teacher-initiated requests for subjects, sections, and class assignments.
+  - **`Assignment`**: Teacher-created homework tasks with due dates, section scoping, and submission status.
+  - **`Submission`**: Student uploaded homework documents with Cloudflare R2 file links, attempt counters (capped at 2), marks, and feedback.
+  - **`Exam`**: Official examination dates, invigilation duties, hall allocations, and status tracking.
+  - **`StudentResult`**: Grade books with score, total, GPA/grade calculations, and draft vs. published toggles.
+  - **`Attendance`**: Daily student presence marks (`PRESENT`, `LATE`, `ABSENT`) scoped by grade and section.
+
+### 3. Auth Engine & Business Logic Hooks (`src/lib/auth.ts`)
+- **Domain Gate**: Evaluates email suffix in `user.create.before` hook:
+  - `@edunexus.std.com` $\rightarrow$ `role: "student"`
+  - `@edunexus.tchr.com` $\rightarrow$ `role: "teacher"`
+  - Others rejected with `NOT_INSTITUTION_EMAIL`.
+- **Approval Gate**: All standard registrations initialized with `isApproved: false`.
+- **Lockout Policy**: Tracks `failedLoginAttempts`; after 3 consecutive failures, locks account for 5 hours (`lockedUntil = now + 5h`). Resets on successful authentication.
+- **Plugins**: Includes `twoFactor({ issuer: "EduNexus" })` and `bearer()`.
+- **Demo Users**: Bypass lockout and approval hooks (`demostudent@edunexus.std.com`, `demoteacher@edunexus.tchr.com`).
+
+### 4. Middleware Pipeline (`src/middleware/session.ts`)
+- **`requireAuth`**: Extracts session from either headers or cookies; attaches `req.user` and `req.session`. Rejects unauthenticated calls with 401.
+- **`requireRole(...allowedRoles)`**: Enforces role boundaries; rejects unauthorized roles with 403.
+
+### 5. Cloud Integrations (`src/lib/r2.ts` & `src/lib/mailer.ts`)
+- **`src/lib/r2.ts`**:
+  - AWS SDK S3 client connecting to Cloudflare R2 bucket.
+  - Configured with Multer memory storage and magic byte validation.
+  - Exports helper functions for PDF uploads and user avatar storage.
+- **`src/lib/mailer.ts`**:
+  - Nodemailer transporter configured with institutional SMTP server.
+  - Sends verification codes, password reset OTPs, and registration alerts.
+
+### 6. Modular Route Implementations (`src/routes/*`)
+- **`auth.routes.ts`**: Handles Better Auth endpoints (`/api/auth/*`).
+- **`user.routes.ts`**: Personal profile querying, profile picture upload to R2, updates, and student/teacher listings.
+- **`admin.routes.ts`**: System statistics, user directory management, role changes, account unlocks, 2FA administrative resets, user deletion, and dynamic PDF fee receipts.
+- **`approval.routes.ts`**: Admin review pipeline for approving or rejecting new accounts.
+- **`assignment.routes.ts`**: CRUD for assignments, submission management with 2-attempt limit, grading, and PDF file attachments.
+- **`attendance.routes.ts`**: Student rosters, daily batch attendance entry, range logs, and analytics/trends.
+- **`exam.routes.ts`**: Examination scheduling, invigilator assignments, filtering by class, and status updates.
+- **`notice.routes.ts`**: Creation, listing (pinned first), updates, and deletion of school announcements.
+- **`request.routes.ts`**: Teacher request workflow for grade/subject allocation with admin approval.
+- **`result.routes.ts`**: Student test/exam grade entry, draft-to-published state transitions, and student grade reports.
+- **`password-reset.routes.ts`**: Multi-factor password reset via TOTP verification and time-limited reset tokens.
+
+---
+
 *Last Updated: September 2026*
+

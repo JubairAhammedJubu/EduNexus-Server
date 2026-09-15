@@ -49,7 +49,7 @@ model User {
   schoolName     String?
   studentClass   String?
   studentSection String?
-  group          String?   // "Science" | "Business Studies" | "Humanities"
+   group          String?   // "Science" | "Business Studies" | "Humanities"
   // teacher-only
   qualification  String?
 
