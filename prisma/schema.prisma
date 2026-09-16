@@ -43,7 +43,8 @@ model User {
   fatherName     String?
   motherName     String?
   dateOfBirth    DateTime?
-  address        String?
+  address          String?
+  bloodGroup       String?
   gender           String?   // "Male" | "Female" | "Other"
   guardianPhone    String?
   guardianRelation String?   // "Father" | "Mother" | "Legal Guardian" | "Uncle" | "Other"
