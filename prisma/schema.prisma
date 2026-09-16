@@ -44,11 +44,14 @@ model User {
   motherName     String?
   dateOfBirth    DateTime?
   address        String?
-  bloodGroup     String?
+  gender           String?   // "Male" | "Female" | "Other"
+  guardianPhone    String?
+  guardianRelation String?   // "Father" | "Mother" | "Legal Guardian" | "Uncle" | "Other"
   // student-only
   schoolName     String?
   studentClass   String?
   studentSection String?
+  sessionYear    String?
   group          String?   // "Science" | "Business Studies" | "Humanities"
   rollNumber     String?   // Auto-assigned sequential roll number
   // teacher-only
