@@ -311,6 +311,14 @@ export const auth = betterAuth({
           const rawSessionYear = (user as any).sessionYear || new Date().getFullYear().toString();
           const isDemo = isDemoEmail(email);
 
+          let dobDate: Date | undefined = undefined;
+          if (rawDob) {
+            const parsed = new Date(rawDob);
+            if (!isNaN(parsed.getTime())) {
+              dobDate = parsed;
+            }
+          }
+
           return {
             data: {
               ...user,
@@ -319,7 +327,7 @@ export const auth = betterAuth({
               ...(assignedRollNumber ? { rollNumber: assignedRollNumber } : {}),
               // Any new registration starts in pending approval state (except demo users)
               isApproved: isDemo ? true : false,
-              ...(rawDob ? { dateOfBirth: new Date(rawDob) } : {}),
+              ...(dobDate ? { dateOfBirth: dobDate } : {}),
             },
           };
         },
