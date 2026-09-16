@@ -78,3 +78,8 @@ MongoDB
 Sessions are stored as an httpOnly cookie set on the response — the frontend never needs to
 manage tokens manually, it just needs `credentials: "include"` on its requests (the
 `better-auth/react` client does this automatically).
+
+---
+
+> 📖 **Full Documentation**: For exhaustive documentation including all 12 database models, security rules, capacity limits, and complete API reference tables for all routes, see [PROJECT_DOCS.md](file:///d:/javascript-practice/EduNexus-Server/PROJECT_DOCS.md).
+
