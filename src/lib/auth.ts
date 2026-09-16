@@ -169,6 +169,18 @@ export const auth = betterAuth({
         type: "string",
         required: false,
       },
+      gender: {
+        type: "string",
+        required: false,
+      },
+      guardianPhone: {
+        type: "string",
+        required: false,
+      },
+      guardianRelation: {
+        type: "string",
+        required: false,
+      },
       schoolName: {
         type: "string",
         required: false,
@@ -178,6 +190,10 @@ export const auth = betterAuth({
         required: false,
       },
       studentSection: {
+        type: "string",
+        required: false,
+      },
+      sessionYear: {
         type: "string",
         required: false,
       },
@@ -292,12 +308,14 @@ export const auth = betterAuth({
           }
 
           const rawDob = (user as any).dateOfBirth;
+          const rawSessionYear = (user as any).sessionYear || new Date().getFullYear().toString();
           const isDemo = isDemoEmail(email);
 
           return {
             data: {
               ...user,
               role,
+              ...(role === "student" ? { sessionYear: rawSessionYear } : {}),
               ...(assignedRollNumber ? { rollNumber: assignedRollNumber } : {}),
               // Any new registration starts in pending approval state (except demo users)
               isApproved: isDemo ? true : false,

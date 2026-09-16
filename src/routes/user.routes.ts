@@ -121,9 +121,13 @@ router.put("/user/profile", requireAuth, async (req, res) => {
       dateOfBirth,
       address,
       bloodGroup,
+      gender,
+      guardianPhone,
+      guardianRelation,
       schoolName,
       studentClass,
       studentSection,
+      sessionYear,
       group,
       rollNumber,
       qualification,
@@ -150,12 +154,18 @@ router.put("/user/profile", requireAuth, async (req, res) => {
         }),
         ...(address !== undefined && { address: address.trim() }),
         ...(bloodGroup !== undefined && { bloodGroup: bloodGroup.trim() }),
+        ...(gender !== undefined && { gender: gender.trim() }),
+        ...(guardianPhone !== undefined && { guardianPhone: guardianPhone.trim() }),
+        ...(guardianRelation !== undefined && { guardianRelation: guardianRelation.trim() }),
         ...(schoolName !== undefined && { schoolName: schoolName.trim() }),
         ...(studentClass !== undefined && {
           studentClass: studentClass.trim(),
         }),
         ...(studentSection !== undefined && {
           studentSection: studentSection.trim(),
+        }),
+        ...(sessionYear !== undefined && {
+          sessionYear: typeof sessionYear === "string" ? sessionYear.trim() : String(sessionYear),
         }),
         ...(group !== undefined && {
           group: typeof group === "string" ? group.trim() : group,
@@ -394,5 +404,42 @@ router.post(
     }
   }
 );
+
+/**
+ * GET /api/user/check-exists?email=...
+ * Checks whether an account with the given email already exists in the database.
+ */
+router.get("/user/check-exists", async (req, res) => {
+  try {
+    const email = (req.query.email as string | undefined)?.toLowerCase().trim();
+    if (!email) {
+      return res.status(400).json({ success: false, exists: false, error: "Email is required." });
+    }
+
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, name: true, email: true, role: true, isApproved: true },
+    });
+
+    if (existingUser) {
+      return res.json({
+        success: true,
+        exists: true,
+        user: {
+          id: existingUser.id,
+          name: existingUser.name,
+          email: existingUser.email,
+          role: existingUser.role,
+          isApproved: existingUser.isApproved,
+        },
+      });
+    }
+
+    return res.json({ success: true, exists: false });
+  } catch (error: any) {
+    console.error("Error checking email existence:", error);
+    return res.status(500).json({ success: false, exists: false, error: "Server error checking email." });
+  }
+});
 
 export default router;
