@@ -472,7 +472,7 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
   try {
     const { status } = req.query;
 
-    const whereClause: any =
+    const whereClause: any=
       (req.user as { role?: string }).role === "admin"
         ? {}
         : { teacherEmail: req.user!.email };
@@ -481,22 +481,11 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
       whereClause.status = status;
     }
 
+    // 1. Fetch assignments without the student relation
     const assignments = await prisma.assignment.findMany({
       where: whereClause,
       include: {
         submissions: {
-          include: {
-            student: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                image: true,
-                studentClass: true,
-                studentSection: true,
-              },
-            },
-          },
           orderBy: {
             submittedAt: "desc",
           },
@@ -507,9 +496,49 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
       },
     });
 
+    // 2. Collect all student IDs from submissions
+    const studentIds = [
+      ...new Set(
+        assignments.flatMap((assignment) =>
+          assignment.submissions.map((submission) => submission.studentId)
+        )
+      ),
+    ];
+
+    // 3. Fetch existing students
+    const students = await prisma.user.findMany({
+      where: {
+        id: {
+          in: studentIds,
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        studentClass: true,
+        studentSection: true,
+      },
+    });
+
+    // 4. Create quick lookup map
+    const studentMap = new Map(
+      students.map((student) => [student.id, student])
+    );
+
+    // 5. Attach student data safely
+    const assignmentsWithStudents = assignments.map((assignment) => ({
+      ...assignment,
+      submissions: assignment.submissions.map((submission) => ({
+        ...submission,
+        student: studentMap.get(submission.studentId) ?? null,
+      })),
+    }));
+
     return res.json({
       success: true,
-      assignments,
+      assignments: assignmentsWithStudents,
     });
   } catch (error: any) {
     console.error("Error fetching assignments:", error);
@@ -520,7 +549,6 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
     });
   }
 });
-
 /**
  * GET /api/teacher/assignments/:id/submissions
  *
