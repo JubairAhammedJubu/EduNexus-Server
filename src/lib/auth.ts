@@ -201,7 +201,7 @@ export const auth = betterAuth({
         type: "string",
         required: false,
       },
-      rollNumber: {
+      roll: {
         type: "string",
         required: false,
       },
@@ -290,13 +290,13 @@ export const auth = betterAuth({
               // Auto-calculate next sequential roll number
               const existingStudents = await prisma.user.findMany({
                 where: sectionWhere,
-                select: { rollNumber: true },
+                select: { roll: true },
               });
 
               let maxRoll = 0;
               for (const s of existingStudents) {
-                if (s.rollNumber) {
-                  const num = parseInt(s.rollNumber.replace(/\D/g, ""), 10);
+                if (s.roll) {
+                  const num = parseInt(s.roll.replace(/\D/g, ""), 10);
                   if (!isNaN(num) && num > maxRoll) {
                     maxRoll = num;
                   }
@@ -324,7 +324,7 @@ export const auth = betterAuth({
               ...user,
               role,
               ...(role === "student" ? { sessionYear: rawSessionYear } : {}),
-              ...(assignedRollNumber ? { rollNumber: assignedRollNumber } : {}),
+              ...(assignedRollNumber ? { roll: assignedRollNumber } : {}),
               // Any new registration starts in pending approval state (except demo users)
               isApproved: isDemo ? true : false,
               ...(dobDate ? { dateOfBirth: dobDate } : {}),
