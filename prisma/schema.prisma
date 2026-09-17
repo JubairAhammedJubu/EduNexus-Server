@@ -43,19 +43,27 @@ model User {
   fatherName     String?
   motherName     String?
   dateOfBirth    DateTime?
-  address        String?
-  bloodGroup     String?
+  address          String?
+  bloodGroup       String?
+  gender           String?   // "Male" | "Female" | "Other"
+  guardianPhone    String?
+  guardianRelation String?   // "Father" | "Mother" | "Legal Guardian" | "Uncle" | "Other"
   // student-only
 <<<<<<< HEAD
   schoolName     String?
   studentClass   String?
   studentSection String?
+  sessionYear    String?
   group          String?   // "Science" | "Business Studies" | "Humanities"
+<<<<<<< HEAD
 =======
   schoolName    String?
   studentClass  String?
   studentSection       String?
 >>>>>>> bf4294ee430590482b4961edaa6af4039dce970e
+=======
+  roll           String?   // Auto-assigned sequential roll number
+>>>>>>> 5a3b4bf61f914099699d4fb5e2634ad6cef0f553
   // teacher-only
   qualification  String?
 
@@ -69,6 +77,7 @@ model User {
   submissions Submission[]
   attendances Attendance[]
 
+  @@index([studentClass, studentSection, group])
   @@map("users")
 }
 
@@ -314,4 +323,70 @@ model Attendance {
   @@index([grade, section])
   @@index([date])
   @@map("attendances")
+}
+
+enum FeeType {
+  MONTHLY
+  EXAM
+  REGISTRATION
+  OTHER
+}
+
+enum PaymentMethod {
+  CASH
+  BANK
+  MOBILE_BANKING
+}
+
+model FeeStructure {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  studentClass String   // "Class 6" ... "Class 10"
+  feeType      FeeType
+  amount       Float
+  examId       String?  // set only when feeType = EXAM — links to Exam.id
+  sessionYear  String   // e.g. "2026"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([studentClass, feeType, examId, sessionYear])
+  @@index([studentClass, feeType])
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model FeePayment {
+  id                    String        @id @default(auto()) @map("_id") @db.ObjectId
+  studentId             String        @db.ObjectId
+  studentEmail          String
+  studentName           String
+  studentClass          String
+  feeType               FeeType
+  amount                Float
+  method                PaymentMethod
+  month                 String?
+  examId                String?
+  sessionYear           String
+  receiptNo             String        @unique
+  note                  String?
+
+  status                PaymentStatus @default(APPROVED)  // NEW
+  submittedByStudent    Boolean       @default(false)     // NEW
+  transactionRef        String?                             // NEW — bank/mobile banking ref
+  screenshotUrl         String?                             // NEW — R2 URL of proof
+  reviewedByAdminEmail  String?                             // NEW
+  reviewedAt            DateTime?                           // NEW
+  rejectionReason       String?                             // NEW
+
+  recordedByAdminEmail  String?       // now optional — null when student-submitted
+  paidAt                DateTime      @default(now())
+
+  @@index([studentId, feeType])
+  @@index([studentEmail])
+  @@index([feeType, month])
+  @@index([examId])
+  @@index([status])
 }

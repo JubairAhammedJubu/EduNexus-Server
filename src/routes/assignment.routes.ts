@@ -93,7 +93,6 @@ router.get(
 
         // remove the nested array so the frontend gets a flat object
         const { submissions, ...rest } = assignment;
-        console.log(submission,rest)
 
         return {
           ...rest,
@@ -122,7 +121,7 @@ router.get(
         error: error?.message || "Failed to fetch student assignments",
       });
     }
-  }
+  },
 );
 
 /**
@@ -158,6 +157,15 @@ router.post(
       }
 
       const { id: assignmentId } = req.params;
+
+      // Validate assignment id
+      if (!assignmentId || !/^[a-f\d]{24}$/i.test(assignmentId)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid assignment ID.",
+        });
+      }
+
       const assignment = await prisma.assignment.findUnique({
         where: { id: assignmentId },
         select: {
@@ -210,7 +218,7 @@ router.post(
         select: { attemptsUsed: true, fileUrl: true },
       });
 
-      const uploadAttemptsUsed = existingSubmission?.attemptsUsed ?? 1;
+      const uploadAttemptsUsed = existingSubmission?.attemptsUsed ?? 0;
 
       if (uploadAttemptsUsed >= 2) {
         return res.status(409).json({
@@ -223,7 +231,25 @@ router.post(
       }
 
       const fileUrl = await uploadPdfToR2(file, req.user!.id, assignmentId);
-      const nextAttemptsUsed = existingSubmission ? uploadAttemptsUsed + 1 : 1;
+
+      // ✅ Ensure returned URL is from your R2 public base
+      const r2PublicUrl = process.env.R2_PUBLIC_URL || "";
+      if (
+        !fileUrl ||
+        typeof fileUrl !== "string" ||
+        !r2PublicUrl ||
+        !fileUrl.startsWith(r2PublicUrl)
+      ) {
+        return res.status(500).json({
+          success: false,
+          error: "Failed to generate a valid file URL.",
+        });
+      }
+
+  
+
+      const nextAttemptsUsed = uploadAttemptsUsed + 1;
+
       const submission = await prisma.submission.upsert({
         where: {
           assignmentId_studentId: {
@@ -246,11 +272,7 @@ router.post(
           status: new Date() > assignment.dueDate ? "LATE" : "SUBMITTED",
         },
       });
-      // const status = // Mark the assignment as having received submissions
-      //   await prisma.assignment.update({
-      //     where: { id: assignmentId },
-      //     data: { submitStatus: "SUBMITTED" },
-      //   });
+
       return res.status(201).json({
         success: true,
         message: "PDF uploaded successfully.",
@@ -285,15 +307,46 @@ router.post(
       const { id: assignmentId } = req.params;
       const { content, fileUrl } = req.body;
 
+      // Basic type cleaning
       const submissionContent =
         typeof content === "string" ? content.trim() : "";
-      const submissionFileUrl =
-        typeof fileUrl === "string" ? fileUrl.trim() : "";
+      const clientFileUrl = typeof fileUrl === "string" ? fileUrl.trim() : "";
 
-      if (!submissionContent && !submissionFileUrl) {
+      // Validate assignment id
+      if (!assignmentId || !/^[a-f\d]{24}$/i.test(assignmentId)) {
         return res.status(400).json({
           success: false,
-          error: "Submission content or file URL is required.",
+          error: "Invalid assignment ID.",
+        });
+      }
+
+      // Validate content length
+      if (submissionContent.length > 5000) {
+        return res.status(400).json({
+          success: false,
+          error: "Content must be 5000 characters or less.",
+        });
+      }
+
+      // Safe URL check (only http/https + your R2 prefix)
+      const isAllowedFileUrl = (url: string) => {
+        try {
+          const parsed = new URL(url);
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            return false;
+          }
+          const r2 = process.env.R2_PUBLIC_URL || "";
+          if (!r2) return false;
+          return url.startsWith(r2);
+        } catch {
+          return false;
+        }
+      };
+
+      if (clientFileUrl && !isAllowedFileUrl(clientFileUrl)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid file URL.",
         });
       }
 
@@ -316,7 +369,6 @@ router.post(
         });
       }
 
-      const isLate = new Date() > assignment.dueDate;
       const existingSubmission = await prisma.submission.findUnique({
         where: {
           assignmentId_studentId: {
@@ -326,11 +378,23 @@ router.post(
         },
         select: { attemptsUsed: true, fileUrl: true },
       });
+
+      // Prefer DB fileUrl from /upload; client url only if allowed
+      const safeFileUrl = clientFileUrl || existingSubmission?.fileUrl || null;
+
+      if (!submissionContent && !safeFileUrl) {
+        return res.status(400).json({
+          success: false,
+          error: "Submission content or uploaded PDF is required.",
+        });
+      }
+
+      const isLate = new Date() > assignment.dueDate;
       const sameUploadedFile =
-        Boolean(submissionFileUrl) &&
-        submissionFileUrl === existingSubmission?.fileUrl;
+        Boolean(safeFileUrl) && safeFileUrl === existingSubmission?.fileUrl;
+
       const attemptsUsed = existingSubmission
-        ? (existingSubmission.attemptsUsed ?? 1)
+        ? (existingSubmission.attemptsUsed ?? 0)
         : 0;
 
       if (attemptsUsed >= 2 && !sameUploadedFile) {
@@ -346,6 +410,7 @@ router.post(
       const nextAttemptsUsed = sameUploadedFile
         ? attemptsUsed
         : attemptsUsed + 1;
+
       const submission = await prisma.submission.upsert({
         where: {
           assignmentId_studentId: {
@@ -358,23 +423,24 @@ router.post(
           studentId: req.user!.id,
           studentEmail: req.user!.email,
           content: submissionContent || null,
-          fileUrl: submissionFileUrl || existingSubmission?.fileUrl || null,
+          fileUrl: safeFileUrl,
           attemptsUsed: nextAttemptsUsed,
           status: isLate ? "LATE" : "SUBMITTED",
         },
         update: {
           content: submissionContent || null,
-          fileUrl: submissionFileUrl || existingSubmission?.fileUrl || null,
+          fileUrl: safeFileUrl,
           attemptsUsed: nextAttemptsUsed,
           submittedAt: new Date(),
           status: isLate ? "LATE" : "SUBMITTED",
         },
       });
-      const status = // Mark the assignment as having received submissions
-        await prisma.assignment.update({
-          where: { id: assignmentId },
-          data: { submitStatus: "SUBMITTED" },
-        });
+
+      await prisma.assignment.update({
+        where: { id: assignmentId },
+        data: { submitStatus: "SUBMITTED" },
+      });
+
       return res.status(201).json({
         success: true,
         message:
@@ -387,7 +453,6 @@ router.post(
       });
     } catch (error: any) {
       console.error("Error submitting assignment:", error);
-
       return res.status(500).json({
         success: false,
         error: error?.message || "Failed to submit assignment",
@@ -407,7 +472,7 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
   try {
     const { status } = req.query;
 
-    const whereClause: any =
+    const whereClause: any=
       (req.user as { role?: string }).role === "admin"
         ? {}
         : { teacherEmail: req.user!.email };
@@ -416,22 +481,11 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
       whereClause.status = status;
     }
 
+    // 1. Fetch assignments without the student relation
     const assignments = await prisma.assignment.findMany({
       where: whereClause,
       include: {
         submissions: {
-          include: {
-            student: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                image: true,
-                studentClass: true,
-                studentSection: true,
-              },
-            },
-          },
           orderBy: {
             submittedAt: "desc",
           },
@@ -442,9 +496,49 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
       },
     });
 
+    // 2. Collect all student IDs from submissions
+    const studentIds = [
+      ...new Set(
+        assignments.flatMap((assignment) =>
+          assignment.submissions.map((submission) => submission.studentId)
+        )
+      ),
+    ];
+
+    // 3. Fetch existing students
+    const students = await prisma.user.findMany({
+      where: {
+        id: {
+          in: studentIds,
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        studentClass: true,
+        studentSection: true,
+      },
+    });
+
+    // 4. Create quick lookup map
+    const studentMap = new Map(
+      students.map((student) => [student.id, student])
+    );
+
+    // 5. Attach student data safely
+    const assignmentsWithStudents = assignments.map((assignment) => ({
+      ...assignment,
+      submissions: assignment.submissions.map((submission) => ({
+        ...submission,
+        student: studentMap.get(submission.studentId) ?? null,
+      })),
+    }));
+
     return res.json({
       success: true,
-      assignments,
+      assignments: assignmentsWithStudents,
     });
   } catch (error: any) {
     console.error("Error fetching assignments:", error);
@@ -455,77 +549,81 @@ router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
     });
   }
 });
-
 /**
  * GET /api/teacher/assignments/:id/submissions
  *
  * Returns all submissions for a specific assignment. Only the assignment creator (or admin) can view them.
  */
-router.get("/teacher/assignments/:id/submissions", ...teacherOnly, async (req, res) => {
-  try {
-    const { id } = req.params;
+router.get(
+  "/teacher/assignments/:id/submissions",
+  ...teacherOnly,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
 
-    const assignment = await prisma.assignment.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        title: true,
-        subject: true,
-        grade: true,
-        section: true,
-        teacherEmail: true,
-        totalMarks: true,
-      },
-    });
-
-    if (!assignment) {
-      return res.status(404).json({
-        success: false,
-        error: "Assignment not found.",
+      const assignment = await prisma.assignment.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          title: true,
+          subject: true,
+          grade: true,
+          section: true,
+          teacherEmail: true,
+          totalMarks: true,
+        },
       });
-    }
 
-    const isAdmin = (req.user as { role?: string }).role === "admin";
-    if (!isAdmin && assignment.teacherEmail !== req.user!.email) {
-      return res.status(403).json({
-        success: false,
-        error: "You are not authorized to view submissions for this assignment.",
-      });
-    }
+      if (!assignment) {
+        return res.status(404).json({
+          success: false,
+          error: "Assignment not found.",
+        });
+      }
 
-    const submissions = await prisma.submission.findMany({
-      where: { assignmentId: id },
-      include: {
-        student: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            image: true,
-            studentClass: true,
-            studentSection: true,
+      const isAdmin = (req.user as { role?: string }).role === "admin";
+      if (!isAdmin && assignment.teacherEmail !== req.user!.email) {
+        return res.status(403).json({
+          success: false,
+          error:
+            "You are not authorized to view submissions for this assignment.",
+        });
+      }
+
+      const submissions = await prisma.submission.findMany({
+        where: { assignmentId: id },
+        include: {
+          student: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              image: true,
+              studentClass: true,
+              studentSection: true,
+            },
           },
         },
-      },
-      orderBy: {
-        submittedAt: "desc",
-      },
-    });
+        orderBy: {
+          submittedAt: "desc",
+        },
+      });
 
-    return res.json({
-      success: true,
-      assignment,
-      submissions,
-    });
-  } catch (error: any) {
-    console.error("Error fetching assignment submissions:", error);
+      return res.json({
+        success: true,
+        assignment,
+        submissions,
+      });
+    } catch (error: any) {
+      console.error("Error fetching assignment submissions:", error);
 
-    return res.status(500).json({
-      success: false,
-      error: error?.message || "Failed to fetch submissions",
-    });
-  }
-});
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to fetch submissions",
+      });
+    }
+  },
+);
 /**
  * POST /api/teacher/assignments
  *
