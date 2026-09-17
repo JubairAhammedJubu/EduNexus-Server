@@ -327,7 +327,7 @@ router.post(
  */
 router.get(
   "/teacher/attendance/stats",
-  // ...teacherOnly,
+  ...teacherOnly,
   async (req, res) => {
     try {
       const today = normalizeDate();
@@ -472,8 +472,15 @@ router.get(
   }
 );
 
-router.get("/student/attendance", async (req, res) => {
+/**
+ * GET /api/student/attendance
+ *
+ * Returns personal attendance history and attendance summary stats
+ * for the authenticated student (or demo student).
+ */
+router.get("/student/attendance", async (req: any, res: any) => {
   try {
+    // 1. Attempt to retrieve user session from middleware or global state
     if (!req.user) {
       try {
         const sessionResult = await auth.api.getSession({
@@ -483,22 +490,28 @@ router.get("/student/attendance", async (req, res) => {
           req.user = sessionResult.user;
         }
       } catch {
-        // fallback
+        // Fallback catch block
       }
     }
 
-    const emailQuery = typeof req.query.email === "string" ? req.query.email.trim() : "";
-    const studentEmail = (req.user?.email || emailQuery || "demostudent@edunexus.std.com").toLowerCase();
-    const isDemo =
-      studentEmail === "demostudent@edunexus.std.com" ||
-      (req.user as any)?.isDemo === true;
+    // 2. Return 401 Unauthorized if no user is authenticated
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: "Unauthorized: Please log in to view your attendance.",
+      });
+    }
 
-    // Find student in DB
+    // 3. Extract ID and email exclusively from the logged-in user (ignoring req.query.email)
+    const currentUserId = req.user.id;
+    const currentUserEmail = (req.user.email || "").toLowerCase();
+
+    // 4. Fetch the specific single student profile from the database
     const studentUser = await prisma.user.findFirst({
       where: {
         OR: [
-          ...(req.user?.id ? [{ id: req.user.id }] : []),
-          { email: { equals: studentEmail, mode: "insensitive" } },
+          { id: currentUserId },
+          { email: { equals: currentUserEmail, mode: "insensitive" } },
         ],
       },
       select: {
@@ -511,58 +524,29 @@ router.get("/student/attendance", async (req, res) => {
       },
     });
 
-    let records = await prisma.attendance.findMany({
+    if (!studentUser) {
+      return res.status(404).json({
+        success: false,
+        error: "Student profile not found.",
+      });
+    }
+
+    // 5. Fetch this student's full attendance history — summary stats
+    // below are always computed from the complete, unfiltered set
+    // (your overall rate shouldn't change just because you're looking
+    // at the Absent tab). The status/search filters are applied
+    // afterward, only to the list actually rendered in the table.
+    const records = await prisma.attendance.findMany({
       where: {
         OR: [
-          ...(studentUser?.id ? [{ studentId: studentUser.id }] : []),
-          { studentEmail: { equals: studentEmail, mode: "insensitive" } },
+          { studentId: studentUser.id },
+          { studentEmail: { equals: studentUser.email, mode: "insensitive" } },
         ],
       },
       orderBy: { date: "desc" },
     });
 
-    // Fallback demo data generation if no attendance records exist for demo student
-    if (records.length === 0 && (isDemo || !studentUser)) {
-      const demoGrade = studentUser?.studentClass || "Class 8";
-      const demoSection = studentUser?.studentSection || "Section A";
-      const demoGroup = studentUser?.department || undefined;
-
-      const mockDates = [
-        { daysAgo: 0, status: "PRESENT" },
-        { daysAgo: 1, status: "PRESENT" },
-        { daysAgo: 2, status: "LATE" },
-        { daysAgo: 3, status: "PRESENT" },
-        { daysAgo: 4, status: "PRESENT" },
-        { daysAgo: 7, status: "PRESENT" },
-        { daysAgo: 8, status: "PRESENT" },
-        { daysAgo: 9, status: "ABSENT" },
-        { daysAgo: 10, status: "PRESENT" },
-        { daysAgo: 11, status: "PRESENT" },
-        { daysAgo: 14, status: "PRESENT" },
-        { daysAgo: 15, status: "LATE" },
-      ];
-
-      records = mockDates.map((m, index) => {
-        const d = new Date();
-        d.setDate(d.getDate() - m.daysAgo);
-        d.setHours(0, 0, 0, 0);
-        return {
-          id: `demo-att-${index + 1}`,
-          studentId: studentUser?.id || "demo-student-id",
-          studentEmail: studentEmail,
-          studentName: studentUser?.name || "Demo Student",
-          teacherEmail: "demoteacher@edunexus.tchr.com",
-          grade: demoGrade,
-          section: demoSection,
-          group: demoGroup || null,
-          status: m.status,
-          date: d,
-          createdAt: d,
-          updatedAt: d,
-        } as any;
-      });
-    }
-
+    // 6. Calculate summary metrics (from the full history, unfiltered)
     const total = records.length;
     const present = records.filter((r) => r.status === "PRESENT").length;
     const late = records.filter((r) => r.status === "LATE").length;
@@ -570,13 +554,37 @@ router.get("/student/attendance", async (req, res) => {
     const attendanceRate =
       total > 0 ? Math.round(((present + late) / total) * 100) : 100;
 
-    const formattedRecords = records.map((r) => ({
+    // 7. Apply the tab filter (?status=) and search filter (?search=)
+    // — these only narrow which rows are returned in `records`, never
+    // the summary computed above.
+    const statusFilter = (req.query.status as string | undefined)?.toUpperCase();
+    const searchTerm = (req.query.search as string | undefined)?.trim().toLowerCase();
+
+    let filteredRecords = records;
+
+    if (statusFilter && ["PRESENT", "LATE", "ABSENT"].includes(statusFilter)) {
+      filteredRecords = filteredRecords.filter((r) => r.status === statusFilter);
+    }
+
+    if (searchTerm) {
+      filteredRecords = filteredRecords.filter((r) => {
+        const haystack = [r.grade, r.section, r.group, r.teacherEmail, r.studentName]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(searchTerm);
+      });
+    }
+
+    // 8. Format the filtered records for the JSON response
+    const formattedRecords = filteredRecords.map((r) => ({
       id: r.id,
       date: r.date instanceof Date ? r.date.toISOString() : new Date(r.date).toISOString(),
       status: r.status,
       grade: r.grade,
       section: r.section,
       group: r.group || undefined,
+      studentName: r.studentName || undefined,
       teacherEmail: r.teacherEmail || undefined,
     }));
 
@@ -599,79 +607,5 @@ router.get("/student/attendance", async (req, res) => {
     });
   }
 });
-
-router.get(
-  "/student/attendance/me",
-  requireAuth,
-  requireRole("student"),
-  async (req, res) => {
-    try {
-      const records = await prisma.attendance.findMany({
-        where: { studentId: req.user!.id },
-        orderBy: { date: "desc" },
-      });
-
-      return res.json({ success: true, records });
-    } catch (error: any) {
-      console.error("Error fetching student attendance:", error);
-      return res.status(500).json({
-        success: false,
-        error: error?.message || "Failed to fetch attendance",
-      });
-    }
-  }
-);
-
-/*
- * GET /api/student/attendance/me/summary
- */
-router.get(
-  "/student/attendance/me/summary",
-  requireAuth,
-  requireRole("student"),
-  async (req, res) => {
-    try {
-      const records = await prisma.attendance.findMany({
-        where: { studentId: req.user!.id },
-        select: { status: true },
-      });
-
-      const total = records.length;
-      const counts = { PRESENT: 0, ABSENT: 0, LATE: 0 };
-      for (const r of records) {
-        if (r.status in counts) counts[r.status as keyof typeof counts] += 1;
-      }
-
-      const toPercent = (count: number) => (total === 0 ? 0 : Math.round((count / total) * 100));
-
-      // Matches the teacher roster's own attendance-rate definition:
-      // PRESENT and LATE both count as "attended" for the rate.
-      const attendanceRate =
-        total > 0 ? Math.round(((counts.PRESENT + counts.LATE) / total) * 100) : 100;
-      const isAtRisk = total >= 3 && attendanceRate < 75;
-
-      return res.json({
-        success: true,
-        summary: {
-          total,
-          present: counts.PRESENT,
-          absent: counts.ABSENT,
-          late: counts.LATE,
-          presentPercent: toPercent(counts.PRESENT),
-          absentPercent: toPercent(counts.ABSENT),
-          latePercent: toPercent(counts.LATE),
-          attendanceRate,
-          isAtRisk,
-        },
-      });
-    } catch (error: any) {
-      console.error("Error summarizing student attendance:", error);
-      return res.status(500).json({
-        success: false,
-        error: error?.message || "Failed to summarize attendance",
-      });
-    }
-  }
-);
 
 export default router;
