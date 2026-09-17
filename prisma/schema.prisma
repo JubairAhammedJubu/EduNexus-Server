@@ -367,6 +367,8 @@ model FeePayment {
   status                PaymentStatus @default(APPROVED)  // NEW
   submittedByStudent    Boolean       @default(false)     // NEW
   transactionRef        String?                             // NEW — bank/mobile banking ref
+  senderPhone           String?                             // Mobile number used to send payment (e.g. bKash/Nagad number)
+  gateway               String?                             // "bKash" | "Nagad" | "Rocket" | "Upay" | "Bank"
   screenshotUrl         String?                             // NEW — R2 URL of proof
   reviewedByAdminEmail  String?                             // NEW
   reviewedAt            DateTime?                           // NEW
