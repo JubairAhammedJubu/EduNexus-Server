@@ -20,7 +20,7 @@ declare global {
 }
 
 /**
- * Verifies the Better Auth session via Cookie OR Authorization Header (Bearer Token)
+ * Verifies the Better Auth session via Cookie
  */
 export async function requireAuth(
   req: Request,

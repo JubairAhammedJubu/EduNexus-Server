@@ -493,6 +493,98 @@ router.get("/student/attendance", async (req: any, res: any) => {
         // Fallback catch block
       }
     }
+<<<<<<< HEAD
+=======
+
+    // 2. Return 401 Unauthorized if no user is authenticated
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        error: "Unauthorized: Please log in to view your attendance.",
+      });
+    }
+
+    // 3. Extract ID and email exclusively from the logged-in user (ignoring req.query.email)
+    const currentUserId = req.user.id;
+    const currentUserEmail = (req.user.email || "").toLowerCase();
+
+    // 4. Fetch the specific single student profile from the database
+    const studentUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: currentUserId },
+          { email: { equals: currentUserEmail, mode: "insensitive" } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        studentClass: true,
+        studentSection: true,
+        department: true,
+      },
+    });
+
+    if (!studentUser) {
+      return res.status(404).json({
+        success: false,
+        error: "Student profile not found.",
+      });
+    }
+
+    // 5. Fetch attendance records matching only this specific student
+    const records = await prisma.attendance.findMany({
+      where: {
+        OR: [
+          { studentId: studentUser.id },
+          { studentEmail: { equals: studentUser.email, mode: "insensitive" } },
+        ],
+      },
+      orderBy: { date: "desc" },
+    });
+
+    // 6. Calculate summary metrics
+    const total = records.length;
+    const present = records.filter((r) => r.status === "PRESENT").length;
+    const late = records.filter((r) => r.status === "LATE").length;
+    const absent = records.filter((r) => r.status === "ABSENT").length;
+    const attendanceRate =
+      total > 0 ? Math.round(((present + late) / total) * 100) : 100;
+
+    // 7. Format records for JSON response
+    const formattedRecords = records.map((r) => ({
+      id: r.id,
+      date: r.date instanceof Date ? r.date.toISOString() : new Date(r.date).toISOString(),
+      status: r.status,
+      grade: r.grade,
+      section: r.section,
+      group: r.group || undefined,
+      teacherEmail: r.teacherEmail || undefined,
+    }));
+
+    return res.json({
+      success: true,
+      records: formattedRecords,
+      summary: {
+        total,
+        present,
+        late,
+        absent,
+        attendanceRate,
+      },
+    });
+  } catch (error: any) {
+    console.error("Error fetching student attendance:", error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Failed to fetch student attendance",
+    });
+  }
+});
+
+export default router;
+>>>>>>> 5a3b4bf61f914099699d4fb5e2634ad6cef0f553
 
     // 2. Return 401 Unauthorized if no user is authenticated
     if (!req.user) {
