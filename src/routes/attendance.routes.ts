@@ -506,6 +506,17 @@ router.get("/student/attendance", async (req: any, res: any) => {
     const currentUserId = req.user.id;
     const currentUserEmail = (req.user.email || "").toLowerCase();
 
+    // 3b. Parse and validate the status/search query params sent by the client
+    const VALID_STATUSES = ["PRESENT", "LATE", "ABSENT"];
+    const rawStatus =
+      typeof req.query.status === "string" ? req.query.status.trim().toUpperCase() : "";
+    const statusFilter = VALID_STATUSES.includes(rawStatus) ? rawStatus : undefined;
+
+    const searchFilter =
+      typeof req.query.search === "string" && req.query.search.trim()
+        ? req.query.search.trim()
+        : undefined;
+
     // 4. Fetch the specific single student profile from the database
     const studentUser = await prisma.user.findFirst({
       where: {
@@ -531,60 +542,66 @@ router.get("/student/attendance", async (req: any, res: any) => {
       });
     }
 
-    // 5. Fetch this student's full attendance history — summary stats
-    // below are always computed from the complete, unfiltered set
-    // (your overall rate shouldn't change just because you're looking
-    // at the Absent tab). The status/search filters are applied
-    // afterward, only to the list actually rendered in the table.
+    // 5. Fetch attendance records matching only this specific student,
+    //    applying the optional status and search filters server-side.
     const records = await prisma.attendance.findMany({
       where: {
-        OR: [
-          { studentId: studentUser.id },
-          { studentEmail: { equals: studentUser.email, mode: "insensitive" } },
+        AND: [
+          {
+            OR: [
+              { studentId: studentUser.id },
+              { studentEmail: { equals: studentUser.email, mode: "insensitive" } },
+            ],
+          },
+          ...(statusFilter ? [{ status: statusFilter }] : []),
+          ...(searchFilter
+            ? [
+                {
+                  OR: [
+                    { grade: { contains: searchFilter, mode: "insensitive" as const } },
+                    { section: { contains: searchFilter, mode: "insensitive" as const } },
+                    { group: { contains: searchFilter, mode: "insensitive" as const } },
+                    { teacherEmail: { contains: searchFilter, mode: "insensitive" as const } },
+                  ],
+                },
+              ]
+            : []),
         ],
       },
       orderBy: { date: "desc" },
     });
 
-    // 6. Calculate summary metrics (from the full history, unfiltered)
-    const total = records.length;
-    const present = records.filter((r) => r.status === "PRESENT").length;
-    const late = records.filter((r) => r.status === "LATE").length;
-    const absent = records.filter((r) => r.status === "ABSENT").length;
+    // 6. Calculate summary metrics.
+    //    NOTE: these are computed from ALL of the student's records (not the
+    //    filtered subset) so the stat cards always reflect overall attendance,
+    //    independent of whichever status tab is currently selected.
+    const allRecordsForSummary = statusFilter
+      ? await prisma.attendance.findMany({
+          where: {
+            OR: [
+              { studentId: studentUser.id },
+              { studentEmail: { equals: studentUser.email, mode: "insensitive" } },
+            ],
+          },
+          select: { status: true },
+        })
+      : records;
+
+    const total = allRecordsForSummary.length;
+    const present = allRecordsForSummary.filter((r) => r.status === "PRESENT").length;
+    const late = allRecordsForSummary.filter((r) => r.status === "LATE").length;
+    const absent = allRecordsForSummary.filter((r) => r.status === "ABSENT").length;
     const attendanceRate =
       total > 0 ? Math.round(((present + late) / total) * 100) : 100;
 
-    // 7. Apply the tab filter (?status=) and search filter (?search=)
-    // — these only narrow which rows are returned in `records`, never
-    // the summary computed above.
-    const statusFilter = (req.query.status as string | undefined)?.toUpperCase();
-    const searchTerm = (req.query.search as string | undefined)?.trim().toLowerCase();
-
-    let filteredRecords = records;
-
-    if (statusFilter && ["PRESENT", "LATE", "ABSENT"].includes(statusFilter)) {
-      filteredRecords = filteredRecords.filter((r) => r.status === statusFilter);
-    }
-
-    if (searchTerm) {
-      filteredRecords = filteredRecords.filter((r) => {
-        const haystack = [r.grade, r.section, r.group, r.teacherEmail, r.studentName]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(searchTerm);
-      });
-    }
-
-    // 8. Format the filtered records for the JSON response
-    const formattedRecords = filteredRecords.map((r) => ({
+    // 7. Format records for JSON response
+    const formattedRecords = records.map((r) => ({
       id: r.id,
       date: r.date instanceof Date ? r.date.toISOString() : new Date(r.date).toISOString(),
       status: r.status,
       grade: r.grade,
       section: r.section,
       group: r.group || undefined,
-      studentName: r.studentName || undefined,
       teacherEmail: r.teacherEmail || undefined,
     }));
 
@@ -608,4 +625,4 @@ router.get("/student/attendance", async (req: any, res: any) => {
   }
 });
 
-export default router;    
+export default router;
