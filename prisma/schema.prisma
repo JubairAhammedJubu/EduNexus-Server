@@ -49,21 +49,16 @@ model User {
   guardianPhone    String?
   guardianRelation String?   // "Father" | "Mother" | "Legal Guardian" | "Uncle" | "Other"
   // student-only
-<<<<<<< HEAD
   schoolName     String?
   studentClass   String?
   studentSection String?
   sessionYear    String?
   group          String?   // "Science" | "Business Studies" | "Humanities"
-<<<<<<< HEAD
-=======
   schoolName    String?
   studentClass  String?
   studentSection       String?
->>>>>>> bf4294ee430590482b4961edaa6af4039dce970e
-=======
   roll           String?   // Auto-assigned sequential roll number
->>>>>>> 5a3b4bf61f914099699d4fb5e2634ad6cef0f553
+
   // teacher-only
   qualification  String?
 
