@@ -101,3 +101,38 @@ export async function uploadImageToR2(
 
   return `${publicUrl}/${key}`;
 }
+
+export async function uploadBufferToR2(
+  buffer: Buffer,
+  key: string,
+  contentType: string,
+) {
+  const bucket = process.env.R2_BUCKET_NAME;
+  const publicUrl = process.env.R2_PUBLIC_URL?.replace(/\/$/, "");
+
+  if (
+    !bucket ||
+    !publicUrl ||
+    !r2Endpoint ||
+    !process.env.R2_ACCESS_KEY_ID ||
+    !process.env.R2_SECRET_ACCESS_KEY
+  ) {
+    throw new Error(
+      "Cloudflare R2 is not configured. Set R2_BUCKET_NAME, R2_PUBLIC_URL, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY.",
+    );
+  }
+
+  await r2Client.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+      ContentLength: buffer.length,
+      ContentDisposition: "inline",
+    }),
+  );
+
+  return `${publicUrl}/${key}`;
+}
+
