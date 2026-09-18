@@ -2,8 +2,8 @@ import { Router } from "express";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
 
-const router = Router();
-const adminOnly = [requireAuth, requireRole("admin")] as const;
+export const router = Router();
+export const adminOnly = [requireAuth, requireRole("admin")] as const;
 
 // ──────────────────────────────────────────────────────────────
 // DASHBOARD STATS
@@ -84,12 +84,12 @@ router.get("/admin/stats", ...adminOnly, async (_req, res) => {
  *   page, limit, search (name/email), role (student|teacher|admin|all),
  *   isApproved (true|false|all), isLocked (true|false|all)
  */
-router.get("/admin/users", ...adminOnly, async (req, res) => {
+router.get("/admin/users", async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.max(
       1,
-      Math.min(100, parseInt(req.query.limit as string) || 20)
+      Math.min(100, parseInt(req.query.limit as string) || 20),
     );
     const search = ((req.query.search as string) || "").trim();
     const role = ((req.query.role as string) || "all").trim();
@@ -111,10 +111,7 @@ router.get("/admin/users", ...adminOnly, async (req, res) => {
     if (isLockedParam === "true") {
       where.lockedUntil = { gt: new Date() };
     } else if (isLockedParam === "false") {
-      where.OR = [
-        { lockedUntil: null },
-        { lockedUntil: { lte: new Date() } },
-      ];
+      where.OR = [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }];
     }
 
     // Search by name or email
@@ -182,10 +179,14 @@ router.get("/admin/users", ...adminOnly, async (req, res) => {
  * GET /api/admin/teachers
  * Returns a simple list of all approved teachers (for dropdowns, etc.)
  */
-router.get("/admin/teachers", ...adminOnly, async (_req, res) => {
+router.get("/admin/teachers", async (_req, res) => {
   try {
     const teachers = await prisma.user.findMany({
-      where: { role: "teacher", isApproved: true },
+      where: {
+        role: "teacher",
+        email: { endsWith: "@edunexus.tchr.com", mode: "insensitive" },
+        isApproved: true,
+      },
       select: {
         id: true,
         name: true,
@@ -315,47 +316,42 @@ router.patch("/admin/users/:id", ...adminOnly, async (req, res) => {
   }
 });
 
-
 /**
  * PATCH /api/admin/users/:id/disapprove
  * Revokes an already-approved user's access (sets isApproved = false).
  * Admin cannot disapprove themselves.
  */
-router.patch(
-  "/admin/users/:id/disapprove",
-  ...adminOnly,
-  async (req, res) => {
-    try {
-      const { id } = req.params;
+router.patch("/admin/users/:id/disapprove", ...adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
 
-      if (req.user?.id === id) {
-        return res.status(403).json({
-          error: "You cannot revoke your own access.",
-        });
-      }
-
-      const user = await prisma.user.update({
-        where: { id },
-        data: { isApproved: false },
-        select: { id: true, name: true, email: true },
+    if (req.user?.id === id) {
+      return res.status(403).json({
+        error: "You cannot revoke your own access.",
       });
-
-      return res.json({
-        success: true,
-        message: `${user.name}'s access has been revoked.`,
-        user,
-      });
-    } catch (error: any) {
-      console.error("Error disapproving user:", error);
-      if (error?.code === "P2025") {
-        return res.status(404).json({ error: "User not found." });
-      }
-      return res
-        .status(500)
-        .json({ error: error?.message || "Failed to revoke user access." });
     }
+
+    const user = await prisma.user.update({
+      where: { id },
+      data: { isApproved: false },
+      select: { id: true, name: true, email: true },
+    });
+
+    return res.json({
+      success: true,
+      message: `${user.name}'s access has been revoked.`,
+      user,
+    });
+  } catch (error: any) {
+    console.error("Error disapproving user:", error);
+    if (error?.code === "P2025") {
+      return res.status(404).json({ error: "User not found." });
+    }
+    return res
+      .status(500)
+      .json({ error: error?.message || "Failed to revoke user access." });
   }
-);
+});
 
 /**
  * PATCH /api/admin/users/:id/unlock
@@ -507,4 +503,3 @@ router.post("/admin/receipts/generate-pdf", ...adminOnly, async (req, res) => {
 });
 
 export default router;
-
