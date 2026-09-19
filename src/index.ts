@@ -14,6 +14,7 @@ import adminRoutes from "./routes/admin.routes.js";
 import adminClassRoutes from "./routes/admin.class.routes.js"
 import adminSubjectRoutes from "./routes/admin.subject.routes.js"
 import adminAcademicRoutes from './routes/admin.academic.routes.js';
+import SubjectRequestsRoutes from "./routes/subject.request.routes.js"
 import adminPeriodRoutes from './routes/admin.periods.routes.js';
 import adminRoutineRoutes from "./routes/admin.routine.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
@@ -52,7 +53,8 @@ app.use("/api", examRoutes);
 app.use("/api", adminRoutes);
 app.use("/api", attendanceRoutes);
 app.use("/api", feeRoutes);
-app.use("api",adminClassRoutes);
+app.use("/api",SubjectRequestsRoutes)
+app.use("/api",adminClassRoutes);
 app.use("/api",adminSubjectRoutes);
 app.use("/api",adminAcademicRoutes);
 app.use("/api",adminRoutineRoutes);
