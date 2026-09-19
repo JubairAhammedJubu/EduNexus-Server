@@ -214,7 +214,7 @@ router.get(
 // ── Teacher list (for assign dropdowns) ────────────────────────────────
 
 // GET /api/admin/teachers
-router.get("/admin/teachers", ...adminOnly, async (req, res) => {
+router.get("/admin/teachers",  async (req, res) => {
   try {
     const teachers = await prisma.user.findMany({
       where: { role: "teacher" },
@@ -247,12 +247,23 @@ router.patch(
           return res.status(404).json({ error: "Teacher not found" });
         }
       }
-
+      const alreadyAssign = await prisma.classSection.findFirst({
+        where:{
+          teacherId,
+          id:{not:req.params.sectionId}
+        }
+      })
+    if(alreadyAssign){
+      return res.status(409).json({
+         error: "This teacher is already assigned as a class teacher.",
+      })
+    }
+      
       const section = await prisma.classSection.update({
         where: { id: req.params.sectionId },
         data: { teacherId: teacherId || null },
       });
-
+ 
       res.json({ section });
     } catch (err: any) {
       console.error("[classes] assign teacher:", err);
@@ -500,4 +511,100 @@ router.patch(
   },
 );
 
+
+/**
+ * GET /api/teacher/assignments
+ * Classes/sections/subjects where this teacher is assigned
+ * (class teacher, subject teacher, or substitute)
+ */
+router.get(
+  "/teacher/assign",
+  requireAuth,
+  requireRole("teacher"),
+  async (req, res) => {
+    try {
+      const teacherId = req.user!.id;
+
+      // Section-level: class teacher / substitute
+      const sections = await prisma.classSection.findMany({
+        where: {
+          isActive: true,
+          OR: [{ teacherId }, { substituteTeacherId: teacherId }],
+        },
+        include: {
+          schoolClass: {
+            select: { id: true, name: true, hasGroups: true, order: true },
+          },
+        },
+        orderBy: { name: "asc" },
+      });
+
+      // Subject-level: teaches this subject in a section
+      const classSubjects = await prisma.classSubject.findMany({
+        where: {
+          OR: [{ teacherId }, { substituteTeacherId: teacherId }],
+        },
+        include: {
+          subject: { include: { group: true } },
+          // need section + class — adjust relation names to your schema
+        },
+      });
+
+      // If ClassSubject has sectionId only:
+      const sectionIds = [
+        ...new Set(classSubjects.map((cs: any) => cs.sectionId).filter(Boolean)),
+      ];
+      const subjectSections = sectionIds.length
+        ? await prisma.classSection.findMany({
+            where: { id: { in: sectionIds } },
+            include: {
+              schoolClass: {
+                select: { id: true, name: true, hasGroups: true },
+              },
+            },
+          })
+        : [];
+      const sectionMap = Object.fromEntries(
+        subjectSections.map((s) => [s.id, s]),
+      );
+
+      const asClassTeacher = sections.map((s) => ({
+        sectionId: s.id,
+        sectionName: s.name,
+        className: s.schoolClass.name,
+        classId: s.schoolClass.id,
+        role:
+          s.teacherId === teacherId ? "CLASS_TEACHER" : "SUBSTITUTE_CLASS_TEACHER",
+      }));
+
+      const asSubjectTeacher = classSubjects.map((cs: any) => {
+        const sec = sectionMap[cs.sectionId];
+        return {
+          classSubjectId: cs.id,
+          subjectName: cs.subject?.name,
+          subjectCode: cs.subject?.code,
+          group: cs.subject?.group?.name ?? null,
+          sectionId: cs.sectionId,
+          sectionName: sec?.name ?? null,
+          className: sec?.schoolClass?.name ?? null,
+          role:
+            cs.teacherId === teacherId
+              ? "SUBJECT_TEACHER"
+              : "SUBSTITUTE_SUBJECT_TEACHER",
+        };
+      });
+
+      res.json({
+        success: true,
+        asClassTeacher,
+        asSubjectTeacher,
+      });
+    } catch (err: any) {
+      console.error("[teacher] assignments:", err);
+      res.status(500).json({
+        error: err?.message || "Failed to load assignments",
+      });
+    }
+  },
+);
 export default router;

@@ -509,7 +509,7 @@ model RoutineSlot {
   periodId       String       @db.ObjectId
   period         Period       @relation(fields: [periodId], references: [id])
   classSubjectId String       @db.ObjectId
-  classSubject   ClassSubject @relation(fields: [classSubjectId], references: [id])
+  classSubject   ClassSubject @relation(fields: [classSubjectId], references: [id], onDelete: Cascade)
   room           String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
