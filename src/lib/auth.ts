@@ -19,7 +19,7 @@ export function isDemoEmail(email: string): boolean {
   );
 }
 
-async function handleDemoUserSignIn(email: string) {
+export async function handleDemoUserSignIn(email: string) {
   const isTeacher = email.endsWith("@edunexus.tchr.com");
   const defaultPassword = isTeacher ? "demoteacher1234" : "demostudent1234";
   const passwordHash = await hashPassword(defaultPassword);
@@ -364,7 +364,15 @@ export const auth = betterAuth({
     before: createAuthMiddleware(async (ctx) => {
       if (ctx.path !== "/sign-in/email") return;
 
-      const email = (ctx.body?.email as string | undefined)?.toLowerCase().trim();
+      let email = (ctx.body?.email as string | undefined)?.toLowerCase().trim();
+
+      if (!email && ctx.request) {
+        try {
+          const cloned = (await ctx.request.clone().json()) as Record<string, any> | null;
+          email = cloned?.email?.toString().toLowerCase().trim();
+        } catch {}
+      }
+
       if (!email) return;
 
       if (isDemoEmail(email)) {
