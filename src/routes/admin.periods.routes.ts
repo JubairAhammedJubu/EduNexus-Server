@@ -80,5 +80,63 @@ router.delete("/admin/periods/:id", ...adminOnly, async (req, res) => {
   }
 });
 
+// GET /api/student/routine — student's own section's weekly routine
+router.get(
+  "/student/routine",
+  requireAuth,
+  requireRole("student"),
+  async (req, res) => {
+    try {
+      const studentClass = req.user!.studentClass ?? "";
+      const studentSection = req.user!.studentSection ?? "";
 
+      const section = await prisma.classSection.findFirst({
+        where: { name: studentSection, schoolClass: { name: studentClass } },
+      });
+
+      if (!section) {
+        return res.status(404).json({ error: "Your section could not be found" });
+      }
+
+      const [periods, slots] = await Promise.all([
+        prisma.period.findMany({ orderBy: { periodNumber: "asc" } }),
+        prisma.routineSlot.findMany({
+          where: { sectionId: section.id },
+          include: {
+            classSubject: { include: { subject: true } },
+          },
+        }),
+      ]);
+
+      const teacherIds = [
+        ...new Set(slots.map((s) => s.classSubject.teacherId).filter(Boolean)),
+      ] as string[];
+      const teachers = teacherIds.length
+        ? await prisma.user.findMany({ where: { id: { in: teacherIds } }, select: { id: true, name: true } })
+        : [];
+      const teacherMap = Object.fromEntries(teachers.map((t) => [t.id, t.name]));
+
+      const grid: Record<string, Record<string, any>> = {};
+      for (const day of ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY"]) {
+        grid[day] = {};
+      }
+      for (const s of slots) {
+        grid[s.day][s.periodId] = {
+          subject: s.classSubject.subject.name,
+          teacherName: s.classSubject.teacherId ? teacherMap[s.classSubject.teacherId] ?? "TBA" : "TBA",
+          room: s.room,
+        };
+      }
+
+      res.json({
+        section: `${studentClass} - ${studentSection}`,
+        periods,
+        grid,
+      });
+    } catch (err: any) {
+      console.error("[routine] student self:", err);
+      res.status(500).json({ error: err?.message || "Failed to load your routine" });
+    }
+  }
+);
 export default router;
