@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
+import { handleDemoUserSignIn } from "../lib/auth.js";
 
 const router = Router();
 
@@ -23,6 +24,7 @@ router.get("/approval-status", async (req, res) => {
       email === "demostudent@edunexus.std.com" ||
       email === "demoteacher@edunexus.tchr.com"
     ) {
+      await handleDemoUserSignIn(email);
       return res.json({ isApproved: true });
     }
 
