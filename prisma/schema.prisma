@@ -40,23 +40,23 @@ model User {
   isApproved Boolean @default(true)
 
   // ── Extended profile info (collected in the post-registration step) ──
-  fatherName     String?
-  motherName     String?
-  dateOfBirth    DateTime?
+  fatherName       String?
+  motherName       String?
+  dateOfBirth      DateTime?
   address          String?
   bloodGroup       String?
-  gender           String?   // "Male" | "Female" | "Other"
+  gender           String? // "Male" | "Female" | "Other"
   guardianPhone    String?
-  guardianRelation String?   // "Father" | "Mother" | "Legal Guardian" | "Uncle" | "Other"
+  guardianRelation String? // "Father" | "Mother" | "Legal Guardian" | "Uncle" | "Other"
   // student-only
-  schoolName     String?
-  studentClass   String?
-  studentSection String?
-  sessionYear    String?
-  group          String?   // "Science" | "Business Studies" | "Humanities"
-  roll           String?   // Auto-assigned sequential roll number
+  schoolName       String?
+  studentClass     String?
+  studentSection   String?
+  sessionYear      String?
+  group            String? // "Science" | "Business Studies" | "Humanities"
+  roll             String? // Auto-assigned sequential roll number
   // teacher-only
-  qualification  String?
+  qualification    String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -260,8 +260,9 @@ model Exam {
   @@index([date])
   @@map("examinations")
 }
+
 model StudentResult {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  id String @id @default(auto()) @map("_id") @db.ObjectId
 
   studentId    String
   studentName  String
@@ -271,21 +272,20 @@ model StudentResult {
   assignmentId String?
   exam         String
 
-  score        Int
-  total        Int
-  grade        String
+  score Int
+  total Int
+  grade String
 
-  status       String   @default("DRAFT")
+  status String @default("DRAFT")
   // "DRAFT" | "PUBLISHED"
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([studentId])
   @@index([studentEmail])
   @@index([assignmentId])
   @@index([status])
-
   @@map("results")
 }
 
@@ -331,11 +331,11 @@ enum PaymentMethod {
 
 model FeeStructure {
   id           String   @id @default(auto()) @map("_id") @db.ObjectId
-  studentClass String   // "Class 6" ... "Class 10"
+  studentClass String // "Class 6" ... "Class 10"
   feeType      FeeType
   amount       Float
-  examId       String?  // set only when feeType = EXAM — links to Exam.id
-  sessionYear  String   // e.g. "2026"
+  examId       String? // set only when feeType = EXAM — links to Exam.id
+  sessionYear  String // e.g. "2026"
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -350,36 +350,171 @@ enum PaymentStatus {
 }
 
 model FeePayment {
-  id                    String        @id @default(auto()) @map("_id") @db.ObjectId
-  studentId             String        @db.ObjectId
-  studentEmail          String
-  studentName           String
-  studentClass          String
-  feeType               FeeType
-  amount                Float
-  method                PaymentMethod
-  month                 String?
-  examId                String?
-  sessionYear           String
-  receiptNo             String        @unique
-  note                  String?
+  id           String        @id @default(auto()) @map("_id") @db.ObjectId
+  studentId    String        @db.ObjectId
+  studentEmail String
+  studentName  String
+  studentClass String
+  feeType      FeeType
+  amount       Float
+  method       PaymentMethod
+  month        String?
+  examId       String?
+  sessionYear  String
+  receiptNo    String        @unique
+  note         String?
 
-  status                PaymentStatus @default(APPROVED)  // NEW
-  submittedByStudent    Boolean       @default(false)     // NEW
-  transactionRef        String?                             // NEW — bank/mobile banking ref
-  senderPhone           String?                             // Mobile number used to send payment (e.g. bKash/Nagad number)
-  gateway               String?                             // "bKash" | "Nagad" | "Rocket" | "Upay" | "Bank"
-  screenshotUrl         String?                             // NEW — R2 URL of proof
-  reviewedByAdminEmail  String?                             // NEW
-  reviewedAt            DateTime?                           // NEW
-  rejectionReason       String?                             // NEW
+  status               PaymentStatus @default(APPROVED) // NEW
+  submittedByStudent   Boolean       @default(false) // NEW
+  transactionRef       String? // NEW — bank/mobile banking ref
+  senderPhone          String? // Mobile number used to send payment (e.g. bKash/Nagad number)
+  gateway              String? // "bKash" | "Nagad" | "Rocket" | "Upay" | "Bank"
+  screenshotUrl        String? // NEW — R2 URL of proof
+  reviewedByAdminEmail String? // NEW
+  reviewedAt           DateTime? // NEW
+  rejectionReason      String? // NEW
 
-  recordedByAdminEmail  String?       // now optional — null when student-submitted
-  paidAt                DateTime      @default(now())
+  recordedByAdminEmail String? // now optional — null when student-submitted
+  paidAt               DateTime @default(now())
 
   @@index([studentId, feeType])
   @@index([studentEmail])
   @@index([feeType, month])
   @@index([examId])
   @@index([status])
+}
+
+// ── Academic structure (admin manages) ───────────────────────────
+
+model SchoolClass {
+  id            String         @id @default(auto()) @map("_id") @db.ObjectId
+  name          String // "Class 6" … "Class 10"
+  order         Int            @default(0) // 6, 7, 8, 9, 10
+  sessionYear   String? // "2026"
+  hasGroups     Boolean        @default(false) // true → Class 9/10
+  isActive      Boolean        @default(true)
+  sections      ClassSection[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  classSubjects ClassSubject[]
+
+  @@unique([name, sessionYear])
+  @@index([isActive])
+  @@index([order])
+  @@map("school_classes")
+}
+
+// Optional: group names as data (not only hardcoded in frontend)
+model AcademicGroup {
+  id            String         @id @default(auto()) @map("_id") @db.ObjectId
+  name          String         @unique // "Science", "Business Studies", "Humanities"
+  isActive      Boolean        @default(true)
+  order         Int            @default(0)
+  classSubjects ClassSubject[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  subjects      Subject[]
+
+  @@map("academic_groups")
+}
+
+model ClassSection {
+  id            String         @id @default(auto()) @map("_id") @db.ObjectId
+  name          String // "Section A", "Section B"
+  classId       String         @db.ObjectId
+  schoolClass   SchoolClass    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  capacity      Int?
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  classSubjects ClassSubject[]
+  routineSlots  RoutineSlot[]
+
+  teacherId           String? @db.ObjectId
+  substituteTeacherId String? @db.ObjectId
+
+  @@unique([classId, name])
+  @@index([classId])
+  @@map("class_sections")
+}
+
+model Subject {
+  id            String         @id @default(auto()) @map("_id") @db.ObjectId
+  name          String // "Mathematics", "Physics", "Accounting"
+  code          String // "MATH", "PHY", "ACC"
+  groupId       String?        @db.ObjectId // set only for group-specific subjects (Class 9/10)
+  group         AcademicGroup? @relation(fields: [groupId], references: [id])
+  isCore        Boolean        @default(true) // true = every student takes it, false = group-specific
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  classSubjects ClassSubject[]
+
+  @@unique([name, groupId])
+  @@map("subjects")
+}
+
+model ClassSubject {
+  id           String         @id @default(auto()) @map("_id") @db.ObjectId
+  classId      String         @db.ObjectId
+  schoolClass  SchoolClass    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  sectionId    String         @db.ObjectId
+  section      ClassSection   @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  subjectId    String         @db.ObjectId
+  subject      Subject        @relation(fields: [subjectId], references: [id])
+  groupId      String?        @db.ObjectId // redundant convenience copy of Subject.groupId, for fast filtering
+  group        AcademicGroup? @relation(fields: [groupId], references: [id])
+  routineSlots RoutineSlot[]
+
+  teacherId           String? @db.ObjectId
+  substituteTeacherId String? @db.ObjectId
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sectionId, subjectId])
+  @@index([classId])
+  @@index([sectionId])
+  @@map("class_subjects")
+}
+
+enum Weekday {
+  SUNDAY
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+}
+
+model Period {
+  id           String        @id @default(auto()) @map("_id") @db.ObjectId
+  periodNumber Int // 1, 2, 3... used for ordering
+  label        String // "Period 1", "Tiffin", "Assembly"
+  startTime    String // "10:00" (24hr, stored as string for simplicity)
+  endTime      String // "10:40"
+  isBreak      Boolean       @default(false) // true for tiffin/assembly — no subject slot allowed
+  routineSlots RoutineSlot[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([periodNumber])
+  @@map("periods")
+}
+
+model RoutineSlot {
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  sectionId      String       @db.ObjectId
+  section        ClassSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  day            Weekday
+  periodId       String       @db.ObjectId
+  period         Period       @relation(fields: [periodId], references: [id])
+  classSubjectId String       @db.ObjectId
+  classSubject   ClassSubject @relation(fields: [classSubjectId], references: [id], onDelete: Cascade)
+  room           String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([sectionId, day, periodId])
+  @@index([sectionId])
+  @@map("routine_slots")
 }
