@@ -9,7 +9,7 @@ export const adminOnly = [requireAuth, requireRole("admin")] as const;
 
 
 // GET /api/admin/classes
-router.get("/admin/classes", async (req, res) => {
+router.get("/admin/classes",...adminOnly, async (req, res) => {
   try {
     const classes = await prisma.schoolClass.findMany({
       where: { isActive: true },
@@ -150,13 +150,13 @@ router.post("/admin/classes/seed", ...adminOnly, async (req, res) => {
   }
 });
 
-router.delete("/admin/classes/:id",async(req,res)=>{
-  const {id} = req.params;
-  const dataDelete = await prisma.schoolClass.delete({
-    where:{id: id},
-  })
-  res.send(dataDelete)
-})
+// router.delete("/admin/classes/:id",async(req,res)=>{
+//   const {id} = req.params;
+//   const dataDelete = await prisma.schoolClass.delete({
+//     where:{id: id},
+//   })
+//   res.send(dataDelete)
+// })
 
 // ── Section detail (for the drawer) ────────────────────────────────────
 
