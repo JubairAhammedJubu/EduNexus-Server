@@ -161,4 +161,29 @@ router.get("/admin/routine/teachers/:teacherId", ...adminOnly, async (req, res) 
   }
 });
 
+// PATCH /api/admin/periods/:id
+// Body: { periodNumber?, label?, startTime?, endTime?, isBreak? }
+router.patch("/admin/periods/:id", ...adminOnly, async (req, res) => {
+  try {
+    const { periodNumber, label, startTime, endTime, isBreak } = req.body;
+    const data: any = {};
+    if (periodNumber !== undefined) data.periodNumber = Number(periodNumber);
+    if (label !== undefined) data.label = label;
+    if (startTime !== undefined) data.startTime = startTime;
+    if (endTime !== undefined) data.endTime = endTime;
+    if (isBreak !== undefined) data.isBreak = !!isBreak;
+
+    const period = await prisma.period.update({
+      where: { id: req.params.id },
+      data,
+    });
+    res.json({ period });
+  } catch (err: any) {
+    if (err.code === "P2002") {
+      return res.status(409).json({ error: "A period with this number already exists" });
+    }
+    console.error("[periods] update:", err);
+    res.status(500).json({ error: err?.message || "Failed to update period" });
+  }
+});
 export default router;
