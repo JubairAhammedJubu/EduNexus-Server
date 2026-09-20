@@ -1,9 +1,9 @@
-import {betterAuth} from "better-auth";
-import {twoFactor} from "better-auth/plugins";
-import {prismaAdapter} from "better-auth/adapters/prisma";
-import {APIError, createAuthMiddleware} from "better-auth/api";
-import {hashPassword} from "better-auth/crypto";
-import {prisma} from "./prisma.js";
+import { betterAuth } from "better-auth";
+import { twoFactor } from "better-auth/plugins";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+import { APIError, createAuthMiddleware } from "better-auth/api";
+import { hashPassword } from "better-auth/crypto";
+import { prisma } from "./prisma.js";
 
 // ── Login lockout policy ───────────────────────────────────────────
 // If a user enters an incorrect password 3 times, their account will be
@@ -22,6 +22,7 @@ export function isDemoEmail(email: string): boolean {
 async function handleDemoUserSignIn(email: string) {
   const isTeacher = email.endsWith("@edunexus.tchr.com");
   const defaultPassword = isTeacher ? "demoteacher1234" : "demostudent1234";
+  const passwordHash = await hashPassword(defaultPassword);
 
   const user = await prisma.user.findUnique({
     where: { email },
@@ -29,7 +30,6 @@ async function handleDemoUserSignIn(email: string) {
   });
 
   if (!user) {
-    const passwordHash = await hashPassword(defaultPassword);
     const created = await prisma.user.create({
       data: {
         name: isTeacher ? "Demo Teacher" : "Demo Student",
@@ -50,17 +50,36 @@ async function handleDemoUserSignIn(email: string) {
       },
     });
   } else {
-    if (!user.isApproved || user.twoFactorEnabled || user.lockedUntil) {
-      await prisma.user.update({
-        where: { email },
+    await prisma.user.update({
+      where: { email },
+      data: {
+        isApproved: true,
+        twoFactorEnabled: false,
+        lockedUntil: null,
+        failedLoginAttempts: 0,
+      },
+    });
+
+    const existingAccount = await prisma.account.findFirst({
+      where: { userId: user.id, providerId: "credential" },
+    });
+
+    if (existingAccount) {
+      await prisma.account.update({
+        where: { id: existingAccount.id },
+        data: { password: passwordHash },
+      });
+    } else {
+      await prisma.account.create({
         data: {
-          isApproved: true,
-          twoFactorEnabled: false,
-          lockedUntil: null,
-          failedLoginAttempts: 0,
+          userId: user.id,
+          accountId: user.id,
+          providerId: "credential",
+          password: passwordHash,
         },
       });
     }
+
     await prisma.twoFactor.deleteMany({
       where: { userId: user.id },
     });
@@ -108,7 +127,7 @@ export const auth = betterAuth({
   }),
 
   advanced: {
-    database: {generateId: false},
+    database: { generateId: false },
     useSecureCookies: isProduction,
     defaultCookieAttributes: {
       sameSite: isProduction ? "none" : "lax",
@@ -354,8 +373,8 @@ export const auth = betterAuth({
       }
 
       const user = await prisma.user.findUnique({
-        where: {email},
-        select: {lockedUntil: true, isApproved: true},
+        where: { email },
+        select: { lockedUntil: true, isApproved: true },
       });
 
       if (user && !user.isApproved) {
@@ -390,8 +409,8 @@ export const auth = betterAuth({
       const signInFailed = returned instanceof APIError;
 
       const user = await prisma.user.findUnique({
-        where: {email},
-        select: {failedLoginAttempts: true, lockedUntil: true},
+        where: { email },
+        select: { failedLoginAttempts: true, lockedUntil: true },
       });
       if (!user) return;
 
@@ -401,8 +420,8 @@ export const auth = betterAuth({
         if (attempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
           const lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
           await prisma.user.update({
-            where: {email},
-            data: {failedLoginAttempts: 0, lockedUntil},
+            where: { email },
+            data: { failedLoginAttempts: 0, lockedUntil },
           });
 
           // Account just got locked — send "account locked" message + lockedUntil
@@ -417,14 +436,14 @@ export const auth = betterAuth({
         }
 
         await prisma.user.update({
-          where: {email},
-          data: {failedLoginAttempts: attempts},
+          where: { email },
+          data: { failedLoginAttempts: attempts },
         });
       } else if (user.failedLoginAttempts > 0 || user.lockedUntil) {
         // Successful login — clear any previous failed attempts or lockout.
         await prisma.user.update({
-          where: {email},
-          data: {failedLoginAttempts: 0, lockedUntil: null},
+          where: { email },
+          data: { failedLoginAttempts: 0, lockedUntil: null },
         });
       }
     }),
