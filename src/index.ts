@@ -19,7 +19,7 @@ import adminPeriodRoutes from './routes/admin.periods.routes.js';
 import adminRoutineRoutes from "./routes/admin.routine.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
 import feeRoutes from "./routes/fee.routes.js";
-import {prisma} from "./lib/prisma.js";
+import { prisma } from "./lib/prisma.js";
 
 const app = express();
 
@@ -33,8 +33,16 @@ const allowedOrigins = [
 ].filter(Boolean);
 
 app.use(
-  cors({ origin: allowedOrigins, credentials: true })
-
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin) || /\.vercel\.app$/.test(new URL(origin).hostname)) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS policy violation"));
+      }
+    },
+    credentials: true,
+  })
 );
 
 // Better Auth reads the raw request body itself, so its routes must be
@@ -53,18 +61,18 @@ app.use("/api", examRoutes);
 app.use("/api", adminRoutes);
 app.use("/api", attendanceRoutes);
 app.use("/api", feeRoutes);
-app.use("/api",SubjectRequestsRoutes)
-app.use("/api",adminClassRoutes);
-app.use("/api",adminSubjectRoutes);
-app.use("/api",adminAcademicRoutes);
-app.use("/api",adminRoutineRoutes);
-app.use("/api",adminPeriodRoutes);
+app.use("/api", SubjectRequestsRoutes)
+app.use("/api", adminClassRoutes);
+app.use("/api", adminSubjectRoutes);
+app.use("/api", adminAcademicRoutes);
+app.use("/api", adminRoutineRoutes);
+app.use("/api", adminPeriodRoutes);
 
 
 app.get("/health", async (_req, res) => {
   try {
     await prisma.$connect();
-    res.json({status: "ok", database: "connected"});
+    res.json({ status: "ok", database: "connected" });
   } catch (error: any) {
     res
       .status(500)
