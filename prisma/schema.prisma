@@ -506,6 +506,7 @@ model RoutineSlot {
   sectionId      String       @db.ObjectId
   section        ClassSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   day            Weekday
+  group          String?
   periodId       String       @db.ObjectId
   period         Period       @relation(fields: [periodId], references: [id])
   classSubjectId String       @db.ObjectId
@@ -514,7 +515,7 @@ model RoutineSlot {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  @@unique([sectionId, day, periodId])
-  @@index([sectionId])
+  @@unique([sectionId,group, day, periodId])
+  @@index([sectionId,group])
   @@map("routine_slots")
 }

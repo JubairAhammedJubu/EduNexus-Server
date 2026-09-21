@@ -8,22 +8,41 @@ export const router = Router();
 export const adminOnly = [requireAuth, requireRole("admin")] as const;
 
 
+const GROUPS_9_10 = ["Science", "Business Studies", "Humanities"] as const;
+
+function classHasGroups(name: string, order?: number) {
+  if (typeof order === "number" && order >= 9) return true;
+  const n = String(name || "").toLowerCase();
+  return n.includes("class 9") || n.includes("class 10");
+}
+
+
+router.get("/admin/routin",async(req,res)=>{
+  const data = await prisma.routineSlot.findMany()
+ res.send(data)
+})
+
 // GET /api/admin/classes
-router.get("/admin/classes",...adminOnly, async (req, res) => {
+router.get("/admin/classes",...adminOnly,  async (req, res) => {
   try {
     const classes = await prisma.schoolClass.findMany({
       where: { isActive: true },
       include: { sections: { where: { isActive: true } } },
       orderBy: { order: "asc" },
     });
-    res.json({ classes });
+
+    const withGroups = classes.map((c) => ({
+      ...c,
+      hasGroups: Boolean(c.hasGroups),
+      groups: c.hasGroups ? [...GROUPS_9_10] : [],
+    }));
+
+    res.json({ classes: withGroups });
   } catch (err: any) {
     console.error("[classes] list:", err);
     res.status(500).json({ error: err?.message || "Failed to load classes" });
   }
 });
-
-// ── Create a class ──────────────────────────────────────────────────────
 
 // POST /api/admin/classes
 // Body: { name, order, sessionYear }
@@ -48,18 +67,23 @@ router.post("/admin/classes", ...adminOnly, async (req, res) => {
         .json({ error: "This class already exists for this session" });
     }
 
+    const hasGroups = classHasGroups(name, order);
+
     const schoolClass = await prisma.schoolClass.create({
-      data: { name, order, sessionYear },
+      data: { name, order, sessionYear, hasGroups },
     });
 
-    res.status(201).json({ class: schoolClass });
+    res.status(201).json({
+      class: {
+        ...schoolClass,
+        groups: hasGroups ? [...GROUPS_9_10] : [],
+      },
+    });
   } catch (err: any) {
     console.error("[classes] create:", err);
     res.status(500).json({ error: err?.message || "Failed to create class" });
   }
 });
-
-// ── Create a section under a class ─────────────────────────────────────
 
 // POST /api/admin/classes/:classId/sections
 // Body: { name, capacity? }
@@ -70,7 +94,8 @@ router.post(
     try {
       const { classId } = req.params;
       const name = String(req.body.name || "").trim();
-      
+      const capacity =
+        req.body.capacity != null ? Number(req.body.capacity) : 30;
 
       if (!name) {
         return res.status(400).json({ error: "Section name is required" });
@@ -93,7 +118,11 @@ router.post(
       }
 
       const section = await prisma.classSection.create({
-        data: { classId, name, capacity:30 },
+        data: {
+          classId,
+          name,
+          capacity: Number.isFinite(capacity) ? capacity : 30,
+        },
       });
 
       res.status(201).json({ section });
@@ -105,9 +134,9 @@ router.post(
     }
   },
 );
-
 // ── Seed Class 6–10 with Section A & B ─────────────────────────────────
 
+// POST /api/admin/classes/seed
 // POST /api/admin/classes/seed
 router.post("/admin/classes/seed", ...adminOnly, async (req, res) => {
   try {
@@ -116,32 +145,61 @@ router.post("/admin/classes/seed", ...adminOnly, async (req, res) => {
 
     for (let order = 6; order <= 10; order++) {
       const name = `Class ${order}`;
+      const hasGroups = order >= 9;
 
       let schoolClass = await prisma.schoolClass.findFirst({
         where: { name, sessionYear },
       });
+
       if (!schoolClass) {
         schoolClass = await prisma.schoolClass.create({
-          data: { name, order, sessionYear, hasGroups: order >= 9 },
+          data: { name, order, sessionYear, hasGroups },
         });
+      } else {
+        // Fix old rows: Class 9–10 must have hasGroups
+        const needsUpdate =
+          schoolClass.hasGroups !== hasGroups ||
+          schoolClass.order !== order;
+
+        if (needsUpdate) {
+          schoolClass = await prisma.schoolClass.update({
+            where: { id: schoolClass.id },
+            data: { hasGroups, order },
+          });
+        }
       }
 
       for (const sectionName of ["Section A", "Section B"]) {
         const existing = await prisma.classSection.findFirst({
           where: { classId: schoolClass.id, name: sectionName },
         });
+
         if (!existing) {
           await prisma.classSection.create({
-            data: { classId: schoolClass.id, name: sectionName },
+            data: {
+              classId: schoolClass.id,
+              name: sectionName,
+              capacity: 30,
+            },
+          });
+        } else if (existing.capacity == null) {
+          await prisma.classSection.update({
+            where: { id: existing.id },
+            data: { capacity: 30 },
           });
         }
       }
 
-      created.push(schoolClass);
+      created.push({
+        ...schoolClass,
+        groups: hasGroups
+          ? ["Science", "Business Studies", "Humanities"]
+          : [],
+      });
     }
 
     res.json({
-      message: "Seeded Class 6–10 with Section A & B",
+      message: "Seeded Class 6–10 with Section A & B (groups on 9–10)",
       classes: created,
     });
   } catch (err: any) {
