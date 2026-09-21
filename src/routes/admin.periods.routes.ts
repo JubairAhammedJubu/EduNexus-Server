@@ -154,11 +154,39 @@ router.get(
   requireRole("student"),
   async (req, res) => {
     try {
-      const studentClass = req.user!.studentClass ?? "";
-      const studentSection = req.user!.studentSection ?? "";
+      const userId = req.user!.id;
+
+      // Fresh profile (group may live on user, not only JWT)
+      const student = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          studentClass: true,
+          studentSection: true,
+          department: true, // stream: Science | Business Studies | Humanities
+          // group: true,   // if you use a field named `group` instead
+        },
+      });
+
+      const studentClass = student?.studentClass ?? "";
+      const studentSection = student?.studentSection ?? "";
+      const studentGroup = (student?.department ?? "").trim() || null;
+
+      if (!studentClass || !studentSection) {
+        return res.status(400).json({
+          error: "Class and section are required on your profile.",
+        });
+      }
 
       const section = await prisma.classSection.findFirst({
-        where: { name: studentSection, schoolClass: { name: studentClass } },
+        where: {
+          name: studentSection,
+          schoolClass: { name: studentClass },
+        },
+        include: {
+          schoolClass: {
+            select: { id: true, name: true, hasGroups: true },
+          },
+        },
       });
 
       if (!section) {
@@ -167,10 +195,36 @@ router.get(
           .json({ error: "Your section could not be found" });
       }
 
+      const hasGroups = Boolean(section.schoolClass.hasGroups);
+
+      // Class 9–10: routine is per stream
+      if (hasGroups) {
+        if (!studentGroup) {
+          return res.status(400).json({
+            error:
+              "Your group/stream is not set (Science, Business Studies, or Humanities). Update your profile.",
+          });
+        }
+        const allowed = [
+          "Science",
+          "Business Studies",
+          "Humanities",
+        ];
+        if (!allowed.includes(studentGroup)) {
+          return res.status(400).json({
+            error: `Invalid group "${studentGroup}". Use: ${allowed.join(", ")}`,
+          });
+        }
+      }
+
       const [periods, slots] = await Promise.all([
         prisma.period.findMany({ orderBy: { periodNumber: "asc" } }),
         prisma.routineSlot.findMany({
-          where: { sectionId: section.id },
+          where: {
+            sectionId: section.id,
+            // 6–8 → group null; 9–10 → exact stream
+            group: hasGroups ? studentGroup : null,
+          },
           include: {
             classSubject: { include: { subject: true } },
           },
@@ -178,8 +232,11 @@ router.get(
       ]);
 
       const teacherIds = [
-        ...new Set(slots.map((s) => s.classSubject.teacherId).filter(Boolean)),
+        ...new Set(
+          slots.map((s) => s.classSubject.teacherId).filter(Boolean),
+        ),
       ] as string[];
+
       const teachers = teacherIds.length
         ? await prisma.user.findMany({
             where: { id: { in: teacherIds } },
@@ -200,6 +257,7 @@ router.get(
       ]) {
         grid[day] = {};
       }
+
       for (const s of slots) {
         grid[s.day][s.periodId] = {
           subject: s.classSubject.subject.name,
@@ -211,7 +269,11 @@ router.get(
       }
 
       res.json({
-        section: `${studentClass} - ${studentSection}`,
+        section: hasGroups
+          ? `${studentClass} - ${studentSection} · ${studentGroup}`
+          : `${studentClass} - ${studentSection}`,
+        group: hasGroups ? studentGroup : null,
+        hasGroups,
         periods,
         grid,
       });
@@ -223,7 +285,6 @@ router.get(
     }
   },
 );
-
 /**
  * GET /api/teacher/routine
  * Weekly slots where this teacher is subject teacher (or substitute).
