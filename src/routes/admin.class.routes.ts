@@ -17,10 +17,7 @@ function classHasGroups(name: string, order?: number) {
 }
 
 
-router.get("/admin/routin",async(req,res)=>{
-  const data = await prisma.routineSlot.findMany()
- res.send(data)
-})
+
 
 // GET /api/admin/classes
 router.get("/admin/classes",...adminOnly,  async (req, res) => {
@@ -278,7 +275,7 @@ router.get(
 // ── Teacher list (for assign dropdowns) ────────────────────────────────
 
 // GET /api/admin/teachers
-router.get("/admin/teachers",  async (req, res) => {
+router.get("/admin/teachers",...adminOnly,  async (req, res) => {
   try {
     const teachers = await prisma.user.findMany({
       where: { role: "teacher" },
