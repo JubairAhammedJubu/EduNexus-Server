@@ -20,6 +20,7 @@ import adminRoutineRoutes from "./routes/admin.routine.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
 import feeRoutes from "./routes/fee.routes.js";
 import atRiskRoutes from "./routes/at-risk.routes.js";
+import performanceRoutes from "./routes/performance.routes.js";
 import { prisma } from "./lib/prisma.js";
 
 const app = express();
@@ -63,6 +64,7 @@ app.use("/api", adminRoutes);
 app.use("/api", attendanceRoutes);
 app.use("/api", feeRoutes);
 app.use("/api", atRiskRoutes);
+app.use("/api", performanceRoutes);
 app.use("/api", SubjectRequestsRoutes)
 app.use("/api", adminClassRoutes);
 app.use("/api", adminSubjectRoutes);
