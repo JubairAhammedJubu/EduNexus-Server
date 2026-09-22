@@ -73,7 +73,7 @@ router.get(
         prisma.routineSlot.findMany({
           where: {
             sectionId: section.id,
-            group: hasGroups ? group : null,
+            ...(hasGroups && group ? { group } : {}),
           },
           include: {
             classSubject: { include: { subject: true } },
@@ -205,7 +205,7 @@ router.put(
       const existing = await prisma.routineSlot.findFirst({
         where: {
           sectionId: section.id,
-          group: hasGroups ? group : null,
+          ...(hasGroups && group ? { group } : {}),
           day: day,
           periodId: String(periodId),
         },
