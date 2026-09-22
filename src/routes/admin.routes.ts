@@ -84,7 +84,7 @@ router.get("/admin/stats", ...adminOnly, async (_req, res) => {
  *   page, limit, search (name/email), role (student|teacher|admin|all),
  *   isApproved (true|false|all), isLocked (true|false|all)
  */
-router.get("/admin/users", async (req, res) => {
+router.get("/admin/users", ...adminOnly, async (req, res) => {
   try {
     const page = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.max(
@@ -154,6 +154,9 @@ router.get("/admin/users", async (req, res) => {
           studentSection: true,
           group: true,
           qualification: true,
+          assignedSubject: true,
+          assignedClass: true,
+          availability: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -179,12 +182,11 @@ router.get("/admin/users", async (req, res) => {
  * GET /api/admin/teachers
  * Returns a simple list of all approved teachers (for dropdowns, etc.)
  */
-router.get("/admin/teachers", async (_req, res) => {
+router.get("/admin/teachers", ...adminOnly, async (_req, res) => {
   try {
     const teachers = await prisma.user.findMany({
       where: {
         role: "teacher",
-        email: { endsWith: "@edunexus.tchr.com", mode: "insensitive" },
         isApproved: true,
       },
       select: {
@@ -194,6 +196,9 @@ router.get("/admin/teachers", async (_req, res) => {
         image: true,
         department: true,
         qualification: true,
+        assignedSubject: true,
+        assignedClass: true,
+        availability: true,
         createdAt: true,
       },
       orderBy: { name: "asc" },
@@ -269,6 +274,9 @@ router.patch("/admin/users/:id", ...adminOnly, async (req, res) => {
       studentClass,
       studentSection,
       group,
+      assignedSubject,
+      assignedClass,
+      availability,
       isApproved,
     } = req.body;
 
@@ -281,6 +289,9 @@ router.patch("/admin/users/:id", ...adminOnly, async (req, res) => {
     if (studentSection !== undefined) data.studentSection = studentSection;
     if (group !== undefined) data.group = group;
     if (isApproved !== undefined) data.isApproved = Boolean(isApproved);
+    if (assignedSubject !== undefined) data.assignedSubject = assignedSubject;
+    if (assignedClass !== undefined) data.assignedClass = assignedClass;
+    if (availability !== undefined) data.availability = availability;
 
     const user = await prisma.user.update({
       where: { id },
@@ -297,6 +308,9 @@ router.patch("/admin/users/:id", ...adminOnly, async (req, res) => {
         studentSection: true,
         group: true,
         isApproved: true,
+        assignedSubject: true,
+        assignedClass: true,
+        availability: true,
       },
     });
 
