@@ -3,6 +3,7 @@ import { fromNodeHeaders } from "better-auth/node";
 import { auth } from "../lib/auth.js";
 import { prisma } from "../lib/prisma.js";
 import { requireAuth, requireRole } from "../middleware/session.js";
+import { generateNoticeDraft, type NoticeCategory } from "../lib/ai-insight.js";
 
 const router = Router();
 
@@ -115,6 +116,54 @@ router.post(
       });
     }
   },
+);
+
+const NOTICE_CATEGORIES = new Set<NoticeCategory>(["Academic", "Events", "General"]);
+
+/**
+ * POST /api/notices/draft
+ *
+ * Turns rough notes into a title and body. Does not create a notice.
+ * The caller reviews the draft, then publishes with POST /api/notices.
+ */
+router.post(
+  "/notices/draft",
+  requireAuth,
+  requireRole("teacher", "admin"),
+  async (req, res) => {
+    try {
+      const notes = typeof req.body?.notes === "string" ? req.body.notes.trim() : "";
+      const category = NOTICE_CATEGORIES.has(req.body?.category) ? req.body.category : "General";
+
+      if (notes.length < 8) {
+        return res.status(400).json({
+          success: false,
+          error: "Add a few words of rough notes before drafting a notice.",
+        });
+      }
+      if (notes.length > 2000) {
+        return res.status(400).json({
+          success: false,
+          error: "Rough notes must be 2000 characters or fewer.",
+        });
+      }
+
+      const draft = await generateNoticeDraft({ notes, category });
+
+      return res.json({
+        success: true,
+        title: draft.title,
+        detail: draft.detail,
+        source: draft.source,
+      });
+    } catch (error: any) {
+      console.error("Error drafting notice:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to draft notice.",
+      });
+    }
+  }
 );
 
 /**
