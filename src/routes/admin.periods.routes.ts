@@ -163,13 +163,14 @@ router.get(
           studentClass: true,
           studentSection: true,
           department: true, // stream: Science | Business Studies | Humanities
-          // group: true,   // if you use a field named `group` instead
+          group: true,      // profile group field
         },
       });
 
       const studentClass = student?.studentClass ?? "";
       const studentSection = student?.studentSection ?? "";
-      const studentGroup = (student?.department ?? "").trim() || null;
+      const studentGroup =
+        (student?.group ?? student?.department ?? "").trim() || null;
 
       if (!studentClass || !studentSection) {
         return res.status(400).json({
@@ -177,9 +178,17 @@ router.get(
         });
       }
 
+      const normalizedSectionNames = Array.from(
+        new Set([
+          studentSection,
+          studentSection.replace(/^section\s+/i, "").trim(),
+          `Section ${studentSection.replace(/^section\s+/i, "").trim()}`,
+        ].filter(Boolean))
+      );
+
       const section = await prisma.classSection.findFirst({
         where: {
-          name: studentSection,
+          name: { in: normalizedSectionNames },
           schoolClass: { name: studentClass },
         },
         include: {
