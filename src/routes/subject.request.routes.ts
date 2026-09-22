@@ -4,15 +4,32 @@ import { requireAuth, requireRole } from "../middleware/session.js";
 
 export const router = Router();
 const adminOnly = [requireAuth, requireRole("admin")] as const;
-// GET /api/admin/subject-requests?status=PENDING
+// GET /api/admin/subject-requests?status=PENDING|APPROVED|REJECTED|ALL
 router.get("/admin/subject-requests", ...adminOnly, async (req, res) => {
   try {
-    const status = (req.query.status as string) || "PENDING";
-    const requests = await prisma.classSubjectRequest.findMany({
-      where: { status },
-      orderBy: { createdAt: "desc" },
+    const statusParam = (req.query.status as string) || "PENDING";
+    const where = statusParam === "ALL" ? {} : { status: statusParam };
+
+    const [requests, pendingCount, approvedCount, rejectedCount, totalCount] = await Promise.all([
+      prisma.classSubjectRequest.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.classSubjectRequest.count({ where: { status: "PENDING" } }),
+      prisma.classSubjectRequest.count({ where: { status: "APPROVED" } }),
+      prisma.classSubjectRequest.count({ where: { status: "REJECTED" } }),
+      prisma.classSubjectRequest.count(),
+    ]);
+
+    res.json({
+      requests,
+      counts: {
+        PENDING: pendingCount,
+        APPROVED: approvedCount,
+        REJECTED: rejectedCount,
+        ALL: totalCount,
+      },
     });
-    res.json({ requests });
   } catch (err: any) {
     console.error("[admin] list subject requests:", err);
     res.status(500).json({ error: err?.message || "Failed to load requests" });
