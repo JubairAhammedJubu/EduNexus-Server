@@ -344,8 +344,8 @@ export const auth = betterAuth({
               role,
               ...(role === "student" ? { sessionYear: rawSessionYear } : {}),
               ...(assignedRollNumber ? { roll: assignedRollNumber } : {}),
-              // Any new registration starts in pending approval state (except demo users)
-              isApproved: isDemo ? true : false,
+              // Any new self-registration starts in pending approval state (except demo users or admin created users)
+              isApproved: isDemo ? true : typeof (user as any).isApproved === "boolean" ? (user as any).isApproved : false,
               ...(dobDate ? { dateOfBirth: dobDate } : {}),
             },
           };

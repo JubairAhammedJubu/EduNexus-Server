@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
+import { hashPassword } from "better-auth/crypto";
 
 export const router = Router();
 export const adminOnly = [requireAuth, requireRole("admin")] as const;
@@ -260,6 +261,187 @@ router.patch("/admin/users/:id/role", ...adminOnly, async (req, res) => {
 });
 
 /**
+ * POST /api/admin/users
+ * Admin endpoint to create a new user (student or teacher) directly in the DB.
+ */
+router.post("/admin/users", ...adminOnly, async (req, res) => {
+  try {
+    const {
+      name,
+      email,
+      password,
+      phone,
+      role = "student",
+      studentClass,
+      studentSection,
+      group,
+      department,
+      qualification,
+      assignedSubject,
+      assignedClass,
+      isApproved = true,
+      fatherName,
+      motherName,
+      dateOfBirth,
+      address,
+      bloodGroup,
+      gender,
+      guardianPhone,
+      guardianRelation,
+      sessionYear,
+      roll,
+      schoolName,
+    } = req.body;
+
+    if (!name || !email) {
+      return res.status(400).json({ error: "Name and email are required." });
+    }
+
+    let cleanEmail = String(email).toLowerCase().trim();
+    if (!cleanEmail.includes("@")) {
+      const domain = role === "teacher" ? "@edunexus.tchr.com" : "@edunexus.std.com";
+      cleanEmail = `${cleanEmail}${domain}`;
+    }
+
+    const existing = await prisma.user.findUnique({
+      where: { email: cleanEmail },
+    });
+
+    if (existing) {
+      return res.status(400).json({ error: "User with this email already exists." });
+    }
+
+    // Determine password (default to student1234 / teacher1234 if not provided)
+    const rawPassword = password
+      ? String(password).trim()
+      : role === "teacher"
+      ? "teacher1234"
+      : "student1234";
+
+    if (rawPassword.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters long." });
+    }
+
+    const passwordHash = await hashPassword(rawPassword);
+
+    // Auto-calculate roll number if student & not explicitly provided
+    let assignedRoll = roll ? String(roll).trim() : null;
+    if (role === "student" && !assignedRoll && studentClass && studentSection) {
+      const cleanClass = String(studentClass).trim();
+      const cleanSection = String(studentSection).trim();
+      const groupFilter = group ? { group: String(group).trim() } : {};
+
+      const existingStudents = await prisma.user.findMany({
+        where: {
+          role: { in: ["student", "STUDENT"] },
+          studentClass: cleanClass,
+          studentSection: cleanSection,
+          ...groupFilter,
+        },
+        select: { roll: true },
+      });
+
+      let maxRoll = 0;
+      for (const s of existingStudents) {
+        if (s.roll) {
+          const num = parseInt(s.roll.replace(/\D/g, ""), 10);
+          if (!isNaN(num) && num > maxRoll) {
+            maxRoll = num;
+          }
+        }
+      }
+      assignedRoll = (maxRoll + 1).toString();
+    }
+
+    let parsedDob: Date | null = null;
+    if (dateOfBirth) {
+      const parsed = new Date(dateOfBirth);
+      if (!isNaN(parsed.getTime())) {
+        parsedDob = parsed;
+      }
+    }
+
+    const user = await prisma.user.create({
+      data: {
+        name: String(name).trim(),
+        email: cleanEmail,
+        phone: phone ? String(phone).trim() : null,
+        role: String(role).trim(),
+        studentClass: studentClass ? String(studentClass).trim() : null,
+        studentSection: studentSection ? String(studentSection).trim() : null,
+        group: group ? String(group).trim() : null,
+        department: department ? String(department).trim() : null,
+        qualification: qualification ? String(qualification).trim() : null,
+        assignedSubject: assignedSubject ? String(assignedSubject).trim() : null,
+        assignedClass: assignedClass ? String(assignedClass).trim() : null,
+        isApproved: Boolean(isApproved),
+        fatherName: fatherName ? String(fatherName).trim() : null,
+        motherName: motherName ? String(motherName).trim() : null,
+        dateOfBirth: parsedDob,
+        address: address ? String(address).trim() : null,
+        bloodGroup: bloodGroup ? String(bloodGroup).trim() : null,
+        gender: gender ? String(gender).trim() : null,
+        guardianPhone: guardianPhone ? String(guardianPhone).trim() : null,
+        guardianRelation: guardianRelation ? String(guardianRelation).trim() : null,
+        sessionYear: sessionYear ? String(sessionYear).trim() : new Date().getFullYear().toString(),
+        roll: assignedRoll,
+        schoolName: schoolName ? String(schoolName).trim() : null,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        phone: true,
+        department: true,
+        qualification: true,
+        studentClass: true,
+        studentSection: true,
+        group: true,
+        isApproved: true,
+        assignedSubject: true,
+        assignedClass: true,
+        availability: true,
+        fatherName: true,
+        motherName: true,
+        dateOfBirth: true,
+        address: true,
+        bloodGroup: true,
+        gender: true,
+        guardianPhone: true,
+        guardianRelation: true,
+        sessionYear: true,
+        roll: true,
+        schoolName: true,
+        createdAt: true,
+      },
+    });
+
+    // Create Better Auth Account credential record so user can log in with password
+    await prisma.account.create({
+      data: {
+        userId: user.id,
+        accountId: user.id,
+        providerId: "credential",
+        password: passwordHash,
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: `Account created for ${user.name}!`,
+      user,
+      temporaryPassword: rawPassword,
+    });
+  } catch (error: any) {
+    console.error("Error creating user:", error);
+    return res
+      .status(500)
+      .json({ error: error?.message || "Failed to create user account." });
+  }
+});
+
+/**
  * PATCH /api/admin/users/:id
  * Updates general user profile info (name, phone, studentClass, studentSection, department, qualification, isApproved, availability).
  */
@@ -419,6 +601,18 @@ router.delete("/admin/users/:id", ...adminOnly, async (req, res) => {
 
     if (!existing) {
       return res.status(404).json({ error: "User not found." });
+    }
+
+    const targetEmail = (existing.email || "").toLowerCase().trim();
+    if (
+      targetEmail === "demostudent@edunexus.std.com" ||
+      targetEmail === "demoteacher@edunexus.tchr.com" ||
+      targetEmail.includes("demostudent") ||
+      targetEmail.includes("demoteacher")
+    ) {
+      return res.status(403).json({
+        error: "Demo accounts are protected and cannot be deleted.",
+      });
     }
 
     await prisma.user.delete({ where: { id } });
