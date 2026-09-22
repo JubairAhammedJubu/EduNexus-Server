@@ -1,5 +1,5 @@
 import { betterAuth } from "better-auth";
-import { twoFactor } from "better-auth/plugins";
+import { admin, twoFactor } from "better-auth/plugins";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { hashPassword } from "better-auth/crypto";
@@ -26,7 +26,12 @@ export async function handleDemoUserSignIn(email: string) {
 
   const user = await prisma.user.findUnique({
     where: { email },
-    select: { id: true, isApproved: true, twoFactorEnabled: true, lockedUntil: true },
+    select: {
+      id: true,
+      isApproved: true,
+      twoFactorEnabled: true,
+      lockedUntil: true,
+    },
   });
 
   if (!user) {
@@ -99,7 +104,9 @@ function formatRemainingLockTime(lockedUntil: Date): string {
 const clientOrigins = [
   "http://localhost:3000",
   "http://localhost:5000",
-  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
+  ...(process.env.CLIENT_ORIGIN
+    ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim())
+    : []),
 ].filter(Boolean);
 
 const isProduction =
@@ -120,6 +127,8 @@ export const auth = betterAuth({
     twoFactor({
       issuer: "EduNexus",
     }),
+
+    admin(),
   ],
 
   database: prismaAdapter(prisma, {
@@ -236,8 +245,8 @@ export const auth = betterAuth({
       isApproved: {
         type: "boolean",
         required: false,
-        defaultValue: true,
-        input: false, // cannot be set from client — only changed via admin approve endpoint
+        defaultValue: false, // cannot be set from client — only changed via admin approve endpoint
+        input: false,
       },
     },
   },
@@ -327,7 +336,8 @@ export const auth = betterAuth({
           }
 
           const rawDob = (user as any).dateOfBirth;
-          const rawSessionYear = (user as any).sessionYear || new Date().getFullYear().toString();
+          const rawSessionYear =
+            (user as any).sessionYear || new Date().getFullYear().toString();
           const isDemo = isDemoEmail(email);
 
           let dobDate: Date | undefined = undefined;
@@ -345,7 +355,11 @@ export const auth = betterAuth({
               ...(role === "student" ? { sessionYear: rawSessionYear } : {}),
               ...(assignedRollNumber ? { roll: assignedRollNumber } : {}),
               // Any new self-registration starts in pending approval state (except demo users or admin created users)
-              isApproved: isDemo ? true : typeof (user as any).isApproved === "boolean" ? (user as any).isApproved : false,
+              isApproved: isDemo
+                ? true
+                : typeof (user as any).isApproved === "boolean"
+                  ? (user as any).isApproved
+                  : false,
               ...(dobDate ? { dateOfBirth: dobDate } : {}),
             },
           };
@@ -368,7 +382,10 @@ export const auth = betterAuth({
 
       if (!email && ctx.request) {
         try {
-          const cloned = (await ctx.request.clone().json()) as Record<string, any> | null;
+          const cloned = (await ctx.request.clone().json()) as Record<
+            string,
+            any
+          > | null;
           email = cloned?.email?.toString().toLowerCase().trim();
         } catch {}
       }
@@ -410,7 +427,9 @@ export const auth = betterAuth({
     after: createAuthMiddleware(async (ctx) => {
       if (ctx.path !== "/sign-in/email") return;
 
-      const email = (ctx.body?.email as string | undefined)?.toLowerCase().trim();
+      const email = (ctx.body?.email as string | undefined)
+        ?.toLowerCase()
+        .trim();
       if (!email) return;
 
       const returned = ctx.context.returned;
