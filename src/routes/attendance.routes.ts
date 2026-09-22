@@ -49,82 +49,361 @@ function normalizeDate(dateInput?: string | Date): Date {
  */
 router.get(
   "/teacher/attendance/students",
-  // ...teacherOnly,
+  requireAuth,
+  requireRole("teacher", "admin"),
   async (req, res) => {
     try {
-      const { grade, section, group, date, startDate, endDate } = req.query;
+      /**
+       * =========================================================
+       * AUTHENTICATED USER
+       * =========================================================
+       */
+      const user = req.user;
 
-      const filterGrade = typeof grade === "string" ? grade.trim() : "";
-      const filterSection = typeof section === "string" ? section.trim() : "";
-      const filterGroup = typeof group === "string" ? group.trim() : "";
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          error: "Unauthorized",
+        });
+      }
 
+      const {
+        grade,
+        section,
+        group,
+        date,
+        startDate,
+        endDate,
+      } = req.query;
+
+      const filterGrade =
+        typeof grade === "string"
+          ? grade.trim()
+          : "";
+
+      const filterSection =
+        typeof section === "string"
+          ? section.trim()
+          : "";
+
+      const filterGroup =
+        typeof group === "string"
+          ? group.trim()
+          : "";
+
+      /**
+       * =========================================================
+       * DATE VALIDATION
+       * =========================================================
+       */
       let targetDateStart: Date;
       let targetDateEnd: Date;
 
-      if (typeof startDate === "string" && typeof endDate === "string" && startDate && endDate) {
+      if (
+        typeof startDate === "string" &&
+        typeof endDate === "string" &&
+        startDate &&
+        endDate
+      ) {
         targetDateStart = normalizeDate(startDate);
         targetDateEnd = normalizeDate(endDate);
-        targetDateEnd.setHours(23, 59, 59, 999);
+
+        targetDateEnd.setHours(
+          23,
+          59,
+          59,
+          999
+        );
+
+        if (
+          isNaN(targetDateStart.getTime()) ||
+          isNaN(targetDateEnd.getTime())
+        ) {
+          return res.status(400).json({
+            success: false,
+            error: "Invalid date range.",
+          });
+        }
+
+        if (targetDateStart > targetDateEnd) {
+          return res.status(400).json({
+            success: false,
+            error:
+              "startDate cannot be later than endDate.",
+          });
+        }
       } else {
-        const queryDateStr = typeof date === "string" ? date.trim() : "";
-        targetDateStart = normalizeDate(queryDateStr);
-        targetDateEnd = new Date(targetDateStart);
-        targetDateEnd.setDate(targetDateEnd.getDate() + 1);
+        const queryDateStr =
+          typeof date === "string"
+            ? date.trim()
+            : "";
+
+        if (!queryDateStr) {
+          return res.status(400).json({
+            success: false,
+            error: "Date is required.",
+          });
+        }
+
+        targetDateStart =
+          normalizeDate(queryDateStr);
+
+        if (isNaN(targetDateStart.getTime())) {
+          return res.status(400).json({
+            success: false,
+            error: "Invalid date.",
+          });
+        }
+
+        targetDateEnd = new Date(
+          targetDateStart
+        );
+
+        targetDateEnd.setDate(
+          targetDateEnd.getDate() + 1
+        );
       }
 
+      /**
+       * =========================================================
+       * BASE STUDENT FILTER
+       * =========================================================
+       */
       const whereClause: any = {
-        role: { in: ["student", "STUDENT"] },
+        role: {
+          in: ["student", "STUDENT"],
+        },
       };
 
-      // Flexible grade matching (e.g. "Class 8", "Grade 8", "8")
-      if (filterGrade && filterGrade !== "All Classes") {
-        const cleanGrade = filterGrade.replace(/(Class|Grade)\s*/i, "").trim();
-        whereClause.studentClass = {
-          in: [filterGrade, `Class ${cleanGrade}`, `Grade ${cleanGrade}`, cleanGrade],
-        };
+      /**
+       * =========================================================
+       * TEACHER ACCESS CONTROL
+       * =========================================================
+       *
+       * Admin:
+       *   Can access all students.
+       *
+       * Teacher:
+       *   Can ONLY access students belonging to sections
+       *   assigned to that teacher.
+       *
+       * Assignment source:
+       *
+       * ClassSection.teacherId -> User.id
+       */
+      if (user.role === "teacher") {
+        const assignedSections =
+          await prisma.classSection.findMany({
+            where: {
+              teacherId: user.id,
+              isActive: true,
+            },
+            select: {
+              name: true,
+              schoolClass: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          });
+
+        /**
+         * Teacher has no assigned section.
+         */
+        if (assignedSections.length === 0) {
+          return res.json({
+            success: true,
+            count: 0,
+            students: [],
+          });
+        }
+
+        /**
+         * Normalize assigned class + section values.
+         *
+         * Example:
+         *
+         * Class 8 / Section A
+         * Class 9 / Section B
+         */
+        const assignedSectionFilters =
+          assignedSections.map((item) => ({
+            studentClass:
+              item.schoolClass.name,
+            studentSection: item.name,
+          }));
+
+        /**
+         * SECURITY:
+         *
+         * Teacher scope is ALWAYS applied.
+         *
+         * Query parameters cannot override this.
+         */
+        whereClause.AND = [
+          {
+            OR: assignedSectionFilters,
+          },
+        ];
       }
 
-      // Section filtering (strictly Section A & Section B)
-      if (filterSection && filterSection !== "All Sections") {
-        if (filterSection === "Section A" || filterSection === "A") {
-          whereClause.studentSection = { in: ["Section A", "A"] };
-        } else if (filterSection === "Section B" || filterSection === "B") {
-          whereClause.studentSection = { in: ["Section B", "B"] };
+      /**
+       * =========================================================
+       * GRADE / CLASS FILTER
+       * =========================================================
+       */
+      if (
+        filterGrade &&
+        filterGrade !== "All Classes"
+      ) {
+        /**
+         * Supports:
+         *
+         * Class 8
+         * Grade 8
+         * 8
+         */
+        const cleanGrade = filterGrade
+          .replace(
+            /(Class|Grade)\s*/i,
+            ""
+          )
+          .trim();
+
+        const gradeValues = [
+          filterGrade,
+          `Class ${cleanGrade}`,
+          `Grade ${cleanGrade}`,
+          cleanGrade,
+        ];
+
+        if (!whereClause.AND) {
+          whereClause.AND = [];
+        }
+
+        whereClause.AND.push({
+          studentClass: {
+            in: gradeValues,
+          },
+        });
+      }
+
+      /**
+       * =========================================================
+       * SECTION FILTER
+       * =========================================================
+       */
+      if (
+        filterSection &&
+        filterSection !== "All Sections"
+      ) {
+        let sectionValues: string[];
+
+        if (
+          filterSection === "Section A" ||
+          filterSection === "A"
+        ) {
+          sectionValues = [
+            "Section A",
+            "A",
+          ];
+        } else if (
+          filterSection === "Section B" ||
+          filterSection === "B"
+        ) {
+          sectionValues = [
+            "Section B",
+            "B",
+          ];
         } else {
           return res.status(400).json({
             success: false,
-            error: "Only Section A and Section B are allowed.",
+            error:
+              "Only Section A and Section B are allowed.",
           });
         }
+
+        if (!whereClause.AND) {
+          whereClause.AND = [];
+        }
+
+        whereClause.AND.push({
+          studentSection: {
+            in: sectionValues,
+          },
+        });
       }
 
-      // Department / Group filtering
+      /**
+       * =========================================================
+       * GROUP FILTER
+       * =========================================================
+       */
       if (
         filterGroup &&
         filterGroup !== "All Groups" &&
         filterGroup !== "General"
       ) {
-        whereClause.department = filterGroup;
+        if (!whereClause.AND) {
+          whereClause.AND = [];
+        }
+
+        whereClause.AND.push({
+          OR: [
+            {
+              group: {
+                equals: filterGroup,
+                mode: "insensitive",
+              },
+            },
+            {
+              department: {
+                equals: filterGroup,
+                mode: "insensitive",
+              },
+            },
+          ],
+        });
       }
 
-      const students = await prisma.user.findMany({
-        where: whereClause,
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          image: true,
-          studentClass: true,
-          studentSection: true,
-          department: true,
-        },
-        orderBy: { name: "asc" },
-      });
+      /**
+       * =========================================================
+       * FETCH STUDENTS
+       * =========================================================
+       */
+      const students =
+        await prisma.user.findMany({
+          where: whereClause,
 
-      // Filter valid MongoDB ObjectIDs to avoid Prisma query errors
-      const validStudentIds = students
-        .map((s) => s.id)
-        .filter((id) => OBJECT_ID_REGEX.test(id));
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            image: true,
+            studentClass: true,
+            studentSection: true,
+            department: true,
+            group: true,
+            roll: true,
+          },
+
+          orderBy: {
+            name: "asc",
+          },
+        });
+
+      /**
+       * =========================================================
+       * VALID MONGODB OBJECT IDS
+       * =========================================================
+       */
+      const validStudentIds =
+        students
+          .map((student) => student.id)
+          .filter((id) =>
+            OBJECT_ID_REGEX.test(id)
+          );
 
       if (validStudentIds.length === 0) {
         return res.json({
@@ -134,76 +413,185 @@ router.get(
         });
       }
 
-      // Attendance status for target date/range
-      const existingAttendance = await prisma.attendance.findMany({
-        where: {
-          studentId: { in: validStudentIds },
-          date: {
-            gte: targetDateStart,
-            lt: targetDateEnd,
+      /**
+       * =========================================================
+       * ATTENDANCE FOR TARGET DATE / RANGE
+       * =========================================================
+       */
+      const existingAttendance =
+        await prisma.attendance.findMany({
+          where: {
+            studentId: {
+              in: validStudentIds,
+            },
+            date: {
+              gte: targetDateStart,
+              lt: targetDateEnd,
+            },
           },
-        },
-        orderBy: { date: "desc" },
-      });
 
-      const attendanceMap = new Map<string, { status: string; updatedAt: Date }>();
-      existingAttendance.forEach((att: Attendance) => {
-        if (!attendanceMap.has(att.studentId)) {
-          attendanceMap.set(att.studentId, { status: att.status, updatedAt: att.updatedAt });
+          orderBy: {
+            date: "desc",
+          },
+        });
+
+      /**
+       * =========================================================
+       * ATTENDANCE MAP
+       * =========================================================
+       */
+      const attendanceMap = new Map<
+        string,
+        {
+          status: string;
+          updatedAt: Date;
         }
-      });
+      >();
 
-      // Overall historical attendance for attendance rate % and at-risk detection
-      const allStudentRecords = await prisma.attendance.findMany({
-        where: {
-          studentId: { in: validStudentIds },
-        },
-        select: {
-          studentId: true,
-          status: true,
-        },
-      });
-
-      const statsMap = new Map<string, { total: number; present: number }>();
-      allStudentRecords.forEach((rec) => {
-        const current = statsMap.get(rec.studentId) || { total: 0, present: 0 };
-        current.total += 1;
-        if (rec.status === "PRESENT" || rec.status === "LATE") {
-          current.present += 1;
+      existingAttendance.forEach(
+        (attendance) => {
+          /**
+           * Keep the latest record for each student.
+           */
+          if (
+            !attendanceMap.has(
+              attendance.studentId
+            )
+          ) {
+            attendanceMap.set(
+              attendance.studentId,
+              {
+                status: attendance.status,
+                updatedAt:
+                  attendance.updatedAt,
+              }
+            );
+          }
         }
-        statsMap.set(rec.studentId, current);
-      });
+      );
 
-      const enrichedStudents = students.map((s) => {
-        const att = attendanceMap.get(s.id);
-        const overall = statsMap.get(s.id) || { total: 0, present: 0 };
-        const attendanceRate =
-          overall.total > 0
-            ? Math.round((overall.present / overall.total) * 100)
-            : 100;
-        const isAtRisk = overall.total >= 3 && attendanceRate < 75;
+      /**
+       * =========================================================
+       * OVERALL ATTENDANCE STATISTICS
+       * =========================================================
+       */
+      const allStudentRecords =
+        await prisma.attendance.findMany({
+          where: {
+            studentId: {
+              in: validStudentIds,
+            },
+          },
 
-        return {
-          ...s,
-          status: att ? att.status : "NOT_MARKED",
-          isMarked: !!att,
-          updatedAt: att?.updatedAt || null,
-          attendanceRate,
-          totalClassesRecorded: overall.total,
-          isAtRisk,
-        };
-      });
+          select: {
+            studentId: true,
+            status: true,
+          },
+        });
 
+      const statsMap = new Map<
+        string,
+        {
+          total: number;
+          present: number;
+        }
+      >();
+
+      allStudentRecords.forEach(
+        (record) => {
+          const current =
+            statsMap.get(record.studentId) || {
+              total: 0,
+              present: 0,
+            };
+
+          current.total += 1;
+
+          if (
+            record.status === "PRESENT" ||
+            record.status === "LATE"
+          ) {
+            current.present += 1;
+          }
+
+          statsMap.set(
+            record.studentId,
+            current
+          );
+        }
+      );
+
+      /**
+       * =========================================================
+       * ENRICH STUDENT DATA
+       * =========================================================
+       */
+      const enrichedStudents =
+        students.map((student) => {
+          const attendance =
+            attendanceMap.get(student.id);
+
+          const overall =
+            statsMap.get(student.id) || {
+              total: 0,
+              present: 0,
+            };
+
+          const attendanceRate =
+            overall.total > 0
+              ? Math.round(
+                  (overall.present /
+                    overall.total) *
+                    100
+                )
+              : 100;
+
+          const isAtRisk =
+            overall.total >= 3 &&
+            attendanceRate < 75;
+
+          return {
+            ...student,
+
+            status: attendance
+              ? attendance.status
+              : "NOT_MARKED",
+
+            isMarked: !!attendance,
+
+            updatedAt:
+              attendance?.updatedAt || null,
+
+            attendanceRate,
+
+            totalClassesRecorded:
+              overall.total,
+
+            isAtRisk,
+          };
+        });
+
+      /**
+       * =========================================================
+       * RESPONSE
+       * =========================================================
+       */
       return res.json({
         success: true,
         count: enrichedStudents.length,
         students: enrichedStudents,
       });
     } catch (error: any) {
-      console.error("Error fetching students for attendance:", error);
+      console.error(
+        "Error fetching students for attendance:",
+        error
+      );
+
       return res.status(500).json({
         success: false,
-        error: error?.message || "Failed to fetch student roster",
+        error:
+          error?.message ||
+          "Failed to fetch student roster",
       });
     }
   }
@@ -217,6 +605,7 @@ router.get(
  */
 router.post(
   "/teacher/attendance/mark",
+...teacherOnly,
   async (req, res) => {
     try {
       if (!req.user) {
@@ -478,134 +867,296 @@ router.get(
  * Returns personal attendance history and attendance summary stats
  * for the authenticated student (or demo student).
  */
-router.get("/student/attendance", async (req: any, res: any) => {
-  try {
-    // 1. Attempt to retrieve user session from middleware or global state
-    if (!req.user) {
-      try {
-        const sessionResult = await auth.api.getSession({
-          headers: fromNodeHeaders(req.headers),
+router.get(
+  "/teacher/students",
+  requireAuth,
+  requireRole("teacher", "admin"),
+  async (req, res) => {
+    try {
+      const user = req.user;
+
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          error: "Unauthorized",
         });
-        if (sessionResult?.user) {
-          req.user = sessionResult.user;
-        }
-      } catch {
-        // Fallback catch block
       }
-    }
 
-    // 2. Return 401 Unauthorized if no user is authenticated
-    if (!req.user) {
-      return res.status(401).json({
+      const page = Math.max(
+        1,
+        Number.parseInt(String(req.query.page || "1"), 10) || 1,
+      );
+
+      const limit = Math.min(
+        100,
+        Math.max(
+          1,
+          Number.parseInt(String(req.query.limit || "20"), 10) || 20,
+        ),
+      );
+
+      const search = String(req.query.search || "").trim();
+      const studentClass = String(req.query.studentClass || "").trim();
+      const group = String(req.query.group || "").trim();
+
+      const where: any = {
+        role: "student",
+      };
+
+      // ============================================
+      // TEACHER ACCESS CONTROL
+      // ============================================
+
+      if (user.role === "teacher") {
+        const assignedSection = await prisma.classSection.findFirst({
+          where: {
+            teacherId: user.id,
+            isActive: true,
+          },
+          select: {
+            id: true,
+            name: true,
+            classId: true,
+          },
+        });
+
+        if (!assignedSection) {
+          return res.status(403).json({
+            success: false,
+            error: "You are not assigned as a class teacher.",
+          });
+        }
+
+        const schoolClass = await prisma.schoolClass.findUnique({
+          where: {
+            id: assignedSection.classId,
+          },
+          select: {
+            id: true,
+            name: true,
+          },
+        });
+
+        if (!schoolClass) {
+          return res.status(404).json({
+            success: false,
+            error: "Assigned class not found.",
+          });
+        }
+
+        // Teacher can only see assigned class + section students
+        where.studentClass = schoolClass.name;
+        where.studentSection = assignedSection.name;
+      }
+
+      // ============================================
+      // ADMIN CLASS FILTER
+      // ============================================
+
+      if (
+        user.role === "admin" &&
+        studentClass &&
+        studentClass !== "All Classes"
+      ) {
+        where.studentClass = {
+          contains: studentClass,
+          mode: "insensitive",
+        };
+      }
+
+      // ============================================
+      // GROUP FILTER
+      // ============================================
+
+      if (
+        group &&
+        group !== "All" &&
+        group !== "All Groups"
+      ) {
+        where.group = {
+          contains: group,
+          mode: "insensitive",
+        };
+      }
+
+      // ============================================
+      // SEARCH
+      // ============================================
+
+      if (search) {
+        where.OR = [
+          {
+            name: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+          {
+            email: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+          {
+            studentClass: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+          {
+            studentSection: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+          {
+            group: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+          {
+            department: {
+              contains: search,
+              mode: "insensitive",
+            },
+          },
+        ];
+      }
+
+      // ============================================
+      // PAGINATION
+      // ============================================
+
+      const skip = (page - 1) * limit;
+
+      const [totalCount, students] = await Promise.all([
+        prisma.user.count({
+          where,
+        }),
+
+        prisma.user.findMany({
+          where,
+          skip,
+          take: limit,
+          orderBy: {
+            name: "asc",
+          },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            image: true,
+            studentClass: true,
+            studentSection: true,
+            group: true,
+            department: true,
+            phone: true,
+            roll: true,
+          },
+        }),
+      ]);
+
+      // ============================================
+      // FILTER OPTIONS SCOPE
+      // ============================================
+
+      const filterScope: any = {
+        role: "student",
+      };
+
+      if (user.role === "teacher") {
+        filterScope.studentClass = where.studentClass;
+        filterScope.studentSection = where.studentSection;
+      }
+
+      const [distinctClasses, distinctGroups] = await Promise.all([
+        prisma.user.findMany({
+          where: filterScope,
+          select: {
+            studentClass: true,
+          },
+          distinct: ["studentClass"],
+        }),
+
+        prisma.user.findMany({
+          where: filterScope,
+          select: {
+            group: true,
+          },
+          distinct: ["group"],
+        }),
+      ]);
+
+      // ============================================
+      // CLASS OPTIONS
+      // ============================================
+
+      const defaultClasses = [
+        "All Classes",
+        "Class 6",
+        "Class 7",
+        "Class 8",
+        "Class 9",
+        "Class 10",
+      ];
+
+      const classSet = new Set<string>(defaultClasses);
+
+      distinctClasses.forEach((item) => {
+        if (item.studentClass?.trim()) {
+          classSet.add(item.studentClass.trim());
+        }
+      });
+
+      // ============================================
+      // GROUP OPTIONS
+      // ============================================
+
+      const defaultGroups = [
+        "All Groups",
+        "Science",
+        "Business Studies",
+        "Humanities",
+      ];
+
+      const groupSet = new Set<string>(defaultGroups);
+
+      distinctGroups.forEach((item) => {
+        if (item.group?.trim()) {
+          groupSet.add(item.group.trim());
+        }
+      });
+
+      // ============================================
+      // PAGINATION INFO
+      // ============================================
+
+      const totalPages = Math.ceil(totalCount / limit) || 1;
+
+      return res.json({
+        success: true,
+        students,
+        pagination: {
+          total: totalCount,
+          page,
+          limit,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1,
+        },
+        classes: Array.from(classSet),
+        groups: Array.from(groupSet),
+      });
+    } catch (error: any) {
+      console.error("Error fetching teacher students:", error);
+
+      return res.status(500).json({
         success: false,
-        error: "Unauthorized: Please log in to view your attendance.",
+        error: error?.message || "Failed to fetch student list",
       });
     }
-
-    // 3. Extract ID and email exclusively from the logged-in user (ignoring req.query.email)
-    const currentUserId = req.user.id;
-    const currentUserEmail = (req.user.email || "").toLowerCase();
-
-    // 4. Fetch the specific single student profile from the database
-    const studentUser = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { id: currentUserId },
-          { email: { equals: currentUserEmail, mode: "insensitive" } },
-        ],
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        studentClass: true,
-        studentSection: true,
-        department: true,
-      },
-    });
-
-    if (!studentUser) {
-      return res.status(404).json({
-        success: false,
-        error: "Student profile not found.",
-      });
-    }
-
-    // 5. Fetch this student's full attendance history — summary stats
-    // below are always computed from the complete, unfiltered set
-    // (your overall rate shouldn't change just because you're looking
-    // at the Absent tab). The status/search filters are applied
-    // afterward, only to the list actually rendered in the table.
-    const records = await prisma.attendance.findMany({
-      where: {
-        OR: [
-          { studentId: studentUser.id },
-          { studentEmail: { equals: studentUser.email, mode: "insensitive" } },
-        ],
-      },
-      orderBy: { date: "desc" },
-    });
-
-    // 6. Calculate summary metrics (from the full history, unfiltered)
-    const total = records.length;
-    const present = records.filter((r) => r.status === "PRESENT").length;
-    const late = records.filter((r) => r.status === "LATE").length;
-    const absent = records.filter((r) => r.status === "ABSENT").length;
-    const attendanceRate =
-      total > 0 ? Math.round(((present + late) / total) * 100) : 100;
-
-    // 7. Apply the tab filter (?status=) and search filter (?search=)
-    // — these only narrow which rows are returned in `records`, never
-    // the summary computed above.
-    const statusFilter = (req.query.status as string | undefined)?.toUpperCase();
-    const searchTerm = (req.query.search as string | undefined)?.trim().toLowerCase();
-
-    let filteredRecords = records;
-
-    if (statusFilter && ["PRESENT", "LATE", "ABSENT"].includes(statusFilter)) {
-      filteredRecords = filteredRecords.filter((r) => r.status === statusFilter);
-    }
-
-    if (searchTerm) {
-      filteredRecords = filteredRecords.filter((r) => {
-        const haystack = [r.grade, r.section, r.group, r.teacherEmail, r.studentName]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(searchTerm);
-      });
-    }
-
-    // 8. Format the filtered records for the JSON response
-    const formattedRecords = filteredRecords.map((r) => ({
-      id: r.id,
-      date: r.date instanceof Date ? r.date.toISOString() : new Date(r.date).toISOString(),
-      status: r.status,
-      grade: r.grade,
-      section: r.section,
-      group: r.group || undefined,
-      studentName: r.studentName || undefined,
-      teacherEmail: r.teacherEmail || undefined,
-    }));
-
-    return res.json({
-      success: true,
-      records: formattedRecords,
-      summary: {
-        total,
-        present,
-        late,
-        absent,
-        attendanceRate,
-      },
-    });
-  } catch (error: any) {
-    console.error("Error fetching student attendance:", error);
-    return res.status(500).json({
-      success: false,
-      error: error?.message || "Failed to fetch student attendance",
-    });
-  }
-});
+  },
+);
 
 export default router;
