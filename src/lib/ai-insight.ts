@@ -59,19 +59,57 @@ Rules:
 - Do not mention that you are an AI or that this is AI-generated.`;
 }
 
-function buildUserPrompt(input: PerformanceInsightRequest): string {
+function formatMetric(value: number | null): string {
+  return value !== null ? `${value}%` : "not enough data";
+}
+
+/** Growth areas named from the numbers only — never a risk label. */
+function describeGrowthFocus(input: PerformanceInsightRequest): string {
+  const areas: string[] = [];
+  if (input.attendanceRate !== null && input.attendanceRate < 85) {
+    areas.push("showing up consistently");
+  }
+  if (input.averageScorePercent !== null && input.averageScorePercent < 65) {
+    areas.push("exam practice");
+  }
+  if (input.assignmentCompletionRate !== null && input.assignmentCompletionRate < 75) {
+    areas.push("turning assignments in");
+  }
+  if (areas.length === 0) {
+    return "The recent pattern looks steady. Encourage them to keep the habit going.";
+  }
+  return `A useful focus this week: ${areas.join(" and ")}.`;
+}
+
+function buildTeacherUserPrompt(input: PerformanceInsightRequest): string {
   return `Student: ${input.studentName}
-Risk level: ${input.riskLevel}
-Attendance rate: ${input.attendanceRate !== null ? `${input.attendanceRate}%` : "not enough data"}
-Average exam score: ${input.averageScorePercent !== null ? `${input.averageScorePercent}%` : "not enough data"}
-Assignment completion: ${input.assignmentCompletionRate !== null ? `${input.assignmentCompletionRate}%` : "not enough data"}
+Risk level (for the teacher only — do not treat it as a diagnosis): ${input.riskLevel}
+Attendance rate: ${formatMetric(input.attendanceRate)}
+Average exam score: ${formatMetric(input.averageScorePercent)}
+Assignment completion: ${formatMetric(input.assignmentCompletionRate)}
 Factors flagged: ${input.reasons.join(" ")}`;
 }
 
-async function callGroq(input: PerformanceInsightRequest, apiKey: string): Promise<string> {
-  const systemPrompt =
-    input.perspective === "student" ? buildStudentSystemPrompt() : buildTeacherSystemPrompt();
+function buildStudentUserPrompt(input: PerformanceInsightRequest): string {
+  return `Student: ${input.studentName}
+Attendance rate: ${formatMetric(input.attendanceRate)}
+Average exam score: ${formatMetric(input.averageScorePercent)}
+Assignment completion: ${formatMetric(input.assignmentCompletionRate)}
+${describeGrowthFocus(input)}
 
+Write the note directly to the student. Stay encouraging.
+Do not use the words risk, at-risk, failing, failure, warning, or concern.`;
+}
+
+const STUDENT_BANNED_LANGUAGE =
+  /\b(at[-\s]?risk|high risk|medium risk|low risk|failing|failure|warning|concerning|concern)\b/i;
+
+async function callGroqChat(
+  apiKey: string,
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number
+): Promise<string> {
   const response = await fetch(GROQ_API_URL, {
     method: "POST",
     headers: {
@@ -82,10 +120,10 @@ async function callGroq(input: PerformanceInsightRequest, apiKey: string): Promi
       model: GROQ_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: buildUserPrompt(input) },
+        { role: "user", content: userPrompt },
       ],
       temperature: 0.4,
-      max_tokens: 220,
+      max_tokens: maxTokens,
     }),
   });
 
@@ -125,14 +163,14 @@ function buildFallbackInsight(input: PerformanceInsightRequest): string {
 
   if (input.riskLevel === "HIGH") {
     openLine = isStudent
-      ? "A few things in your recent numbers are worth paying closer attention to."
+      ? "You've got a clear place to grow, and a little focused effort this week can move these numbers."
       : `A few things in ${input.studentName}'s recent numbers are worth checking in on.`;
     suggestion = isStudent
-      ? "A good next step could be picking just one area above and giving it extra focused time this week, and talking to a teacher if something's getting in the way."
+      ? "A good next step is picking just one area and giving it extra time this week. A short chat with a teacher can help you choose where to start."
       : "A brief, low-pressure check-in conversation could help surface what's getting in the way.";
   } else if (input.riskLevel === "MEDIUM") {
     openLine = isStudent
-      ? "Your overall pattern looks reasonable, though a couple of areas are trending a little lower than usual."
+      ? "You're in a good spot overall, and a bit more consistency will strengthen a couple of areas."
       : `${input.studentName}'s overall pattern looks reasonable, though a couple of areas are trending a little lower than usual.`;
     suggestion = isStudent
       ? "Keeping an eye on those areas over the next couple of weeks should help keep things on track."
@@ -146,8 +184,10 @@ function buildFallbackInsight(input: PerformanceInsightRequest): string {
       : "No action needed right now beyond the usual encouragement to keep it up.";
   }
 
+  // Teacher-facing reasons name thresholds ("below passing"). Those
+  // phrases stay on the teacher view only.
   const reasonsSentence =
-    input.reasons.length > 0 && input.riskLevel !== "LOW"
+    !isStudent && input.reasons.length > 0 && input.riskLevel !== "LOW"
       ? ` Specifically: ${input.reasons.map((r) => r.replace(/\.$/, "")).join("; ")}.`
       : "";
 
@@ -166,9 +206,23 @@ export async function generatePerformanceInsight(
 ): Promise<GeneratedInsight> {
   const apiKey = process.env.GROQ_API_KEY;
 
+  const fallback = () => ({ text: buildFallbackInsight(input), source: "fallback" as const });
+
   if (apiKey) {
     try {
-      const text = await callGroq(input, apiKey);
+      const systemPrompt =
+        input.perspective === "student" ? buildStudentSystemPrompt() : buildTeacherSystemPrompt();
+      const userPrompt =
+        input.perspective === "student"
+          ? buildStudentUserPrompt(input)
+          : buildTeacherUserPrompt(input);
+      const text = await callGroqChat(apiKey, systemPrompt, userPrompt, 220);
+
+      if (input.perspective === "student" && STUDENT_BANNED_LANGUAGE.test(text)) {
+        console.warn("Student insight contained concern language; using the encouraging template.");
+        return fallback();
+      }
+
       return { text, source: "groq" };
     } catch (error) {
       console.warn(
@@ -178,5 +232,179 @@ export async function generatePerformanceInsight(
     }
   }
 
-  return { text: buildFallbackInsight(input), source: "fallback" };
+  return fallback();
+}
+
+export interface FeedbackDraftRequest {
+  studentName: string;
+  assignmentTitle: string;
+  subject: string;
+  assignmentDescription: string | null;
+  /** Score the teacher already entered. The model must not change it. */
+  marks: number;
+  totalMarks: number;
+}
+
+function buildFeedbackSystemPrompt(): string {
+  return `You draft a short feedback comment a teacher will review before it
+is sent to a student. The score is already decided by the teacher. You
+only write the comment.
+
+Rules:
+- 2-4 sentences, second person ("you"/"your"), plain and supportive.
+- Repeat the score exactly as given. Never suggest a different score,
+  grade, or mark.
+- You have not read the student's file. Do not invent specific mistakes,
+  quotes, or strengths that are not in the assignment title or description.
+- If the description is thin, stay general and point to one low-stakes
+  next step.
+- Do not mention that you are an AI.`;
+}
+
+function buildFeedbackUserPrompt(input: FeedbackDraftRequest): string {
+  const description = input.assignmentDescription?.trim() || "No description was provided.";
+  return `Student: ${input.studentName}
+Assignment: ${input.assignmentTitle}
+Subject: ${input.subject}
+Assignment description: ${description}
+Teacher-entered score: ${input.marks} out of ${input.totalMarks}
+
+Draft the comment. The score stays ${input.marks}/${input.totalMarks}.`;
+}
+
+function buildFeedbackFallback(input: FeedbackDraftRequest): string {
+  const percent =
+    input.totalMarks > 0 ? Math.round((input.marks / input.totalMarks) * 100) : 0;
+  const scoreLine = `You scored ${input.marks} out of ${input.totalMarks} on ${input.assignmentTitle}.`;
+
+  if (percent >= 85) {
+    return `${scoreLine} This is strong work in ${input.subject}. Keep the approach that worked here, and use one idea from the task on the next assignment.`;
+  }
+  if (percent >= 60) {
+    return `${scoreLine} This is a solid submission in ${input.subject}. A useful next step is to revisit the part of the task that felt least certain before the next one.`;
+  }
+  return `${scoreLine} Thanks for turning it in. A good next step is to go over the task with your teacher and redo one section so the next submission is clearer.`;
+}
+
+/**
+ * Drafts assignment feedback from the assignment context and a score
+ * the teacher already entered. Does not persist anything — the caller
+ * must keep the teacher as the last step before a student sees it.
+ */
+export async function generateFeedbackDraft(
+  input: FeedbackDraftRequest
+): Promise<GeneratedInsight> {
+  const apiKey = process.env.GROQ_API_KEY;
+  const fallback = () => ({ text: buildFeedbackFallback(input), source: "fallback" as const });
+
+  if (apiKey) {
+    try {
+      const text = await callGroqChat(
+        apiKey,
+        buildFeedbackSystemPrompt(),
+        buildFeedbackUserPrompt(input),
+        180
+      );
+      return { text, source: "groq" };
+    } catch (error) {
+      console.warn(
+        "Groq feedback draft failed, falling back to the built-in template:",
+        (error as Error)?.message
+      );
+    }
+  }
+
+  return fallback();
+}
+
+export type NoticeCategory = "Academic" | "Events" | "General";
+
+export interface NoticeDraftRequest {
+  notes: string;
+  category: NoticeCategory;
+}
+
+export interface NoticeDraft {
+  title: string;
+  detail: string;
+  source: "groq" | "fallback";
+}
+
+function buildNoticeSystemPrompt(): string {
+  return `You turn a teacher's rough notes into a short school notice.
+You do not publish it. A person will review and edit your draft first.
+
+Rules:
+- Use only facts that appear in the notes. Do not invent dates, times,
+  rooms, requirements, or consequences.
+- Title: under 80 characters, specific, no clickbait.
+- Detail: 2-5 sentences, plain language, suitable to post on a school
+  notice board.
+- Reply with JSON only, no markdown: {"title":"...","detail":"..."}`;
+}
+
+function parseNoticeJson(raw: string): { title: string; detail: string } | null {
+  const cleaned = raw.replace(/```json|```/gi, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end <= start) return null;
+
+  try {
+    const parsed = JSON.parse(cleaned.slice(start, end + 1)) as {
+      title?: unknown;
+      detail?: unknown;
+    };
+    if (typeof parsed.title !== "string" || typeof parsed.detail !== "string") return null;
+    const title = parsed.title.trim().slice(0, 120);
+    const detail = parsed.detail.trim().slice(0, 2000);
+    if (!title || !detail) return null;
+    return { title, detail };
+  } catch {
+    return null;
+  }
+}
+
+function buildNoticeFallback(input: NoticeDraftRequest): { title: string; detail: string } {
+  const cleaned = input.notes.replace(/\s+/g, " ").trim();
+  const sentence = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  const detail = /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+  const firstClause = sentence.split(/[.,;]/)[0]?.trim() ?? "";
+  const title =
+    firstClause.length >= 8 && firstClause.length <= 80
+      ? firstClause
+      : `${input.category} notice`;
+  return { title, detail };
+}
+
+/**
+ * Turns rough notice notes into a title and body. Does not create a
+ * notice — publishing stays a separate, human action.
+ */
+export async function generateNoticeDraft(input: NoticeDraftRequest): Promise<NoticeDraft> {
+  const apiKey = process.env.GROQ_API_KEY;
+  const fallback = () => ({ ...buildNoticeFallback(input), source: "fallback" as const });
+
+  if (apiKey) {
+    try {
+      const raw = await callGroqChat(
+        apiKey,
+        buildNoticeSystemPrompt(),
+        `Category: ${input.category}\nRough notes: ${input.notes.trim()}`,
+        400
+      );
+      const parsed = parseNoticeJson(raw);
+      if (!parsed) {
+        console.warn("Groq notice draft was not valid JSON; using the built-in wording.");
+        return fallback();
+      }
+      return { ...parsed, source: "groq" };
+    } catch (error) {
+      console.warn(
+        "Groq notice draft failed, falling back to the built-in wording:",
+        (error as Error)?.message
+      );
+    }
+  }
+
+  return fallback();
 }

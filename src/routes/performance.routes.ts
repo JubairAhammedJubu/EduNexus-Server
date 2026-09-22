@@ -1,8 +1,18 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
-import { computeAtRiskScore, type AtRiskScore } from "../lib/at-risk.js";
+import { computeAtRiskScore, type AtRiskScore, type RiskLevel } from "../lib/at-risk.js";
 import { generatePerformanceInsight } from "../lib/ai-insight.js";
+
+/** Student-facing label. The internal risk level is never sent to the student. */
+export type StudentPace = "ON_TRACK" | "BUILDING" | "GROWING" | "GETTING_STARTED";
+
+function toStudentPace(level: RiskLevel): StudentPace {
+  if (level === "LOW") return "ON_TRACK";
+  if (level === "MEDIUM") return "BUILDING";
+  if (level === "HIGH") return "GROWING";
+  return "GETTING_STARTED";
+}
 
 const router = Router();
 const studentOnly = [requireAuth, requireRole("student")];
@@ -85,7 +95,10 @@ router.get("/student/performance", ...studentOnly, async (req, res) => {
     return res.json({
       success: true,
       studentName: loaded.studentName,
-      ...loaded.score,
+      pace: toStudentPace(loaded.score.riskLevel),
+      attendanceRate: loaded.score.attendanceRate,
+      averageScorePercent: loaded.score.averageScorePercent,
+      assignmentCompletionRate: loaded.score.assignmentCompletionRate,
     });
   } catch (error: any) {
     console.error("Error computing student performance:", error);
@@ -137,7 +150,6 @@ router.post("/student/performance/insight", ...studentOnly, async (req, res) => 
       success: true,
       insight: insight.text,
       source: insight.source,
-      riskLevel: score.riskLevel,
     });
   } catch (error: any) {
     console.error("Error generating student performance insight:", error);
