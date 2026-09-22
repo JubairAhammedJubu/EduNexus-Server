@@ -30,17 +30,19 @@ export function computeAtRiskScore(input: AtRiskInput): AtRiskScore {
   let scoredDimensions = 0;
 
   let attendanceRate: number | null = null;
-  if (input.attendanceTotal >= MIN_ATTENDANCE_RECORDS) {
+  if (input.attendanceTotal > 0) {
     attendanceRate = Math.round(
       (input.attendancePresentOrLate / input.attendanceTotal) * 100
     );
-    scoredDimensions += 1;
-    if (attendanceRate < 75) {
-      points += 2;
-      reasons.push(`Attendance is ${attendanceRate}%, below the 75% threshold.`);
-    } else if (attendanceRate < 85) {
-      points += 1;
-      reasons.push(`Attendance is ${attendanceRate}%, trending low.`);
+    if (input.attendanceTotal >= MIN_ATTENDANCE_RECORDS) {
+      scoredDimensions += 1;
+      if (attendanceRate < 75) {
+        points += 2;
+        reasons.push(`Attendance is ${attendanceRate}%, below the 75% threshold.`);
+      } else if (attendanceRate < 85) {
+        points += 1;
+        reasons.push(`Attendance is ${attendanceRate}%, trending low.`);
+      }
     }
   }
 
