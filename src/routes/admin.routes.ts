@@ -2,6 +2,7 @@ import { Router } from "express";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
 import { hashPassword } from "better-auth/crypto";
+import { auth } from "../lib/auth.js";
 
 export const router = Router();
 export const adminOnly = [requireAuth, requireRole("admin")] as const;
@@ -264,184 +265,245 @@ router.patch("/admin/users/:id/role", ...adminOnly, async (req, res) => {
  * POST /api/admin/users
  * Admin endpoint to create a new user (student or teacher) directly in the DB.
  */
-router.post("/admin/users", ...adminOnly, async (req, res) => {
-  try {
-    const {
-      name,
-      email,
-      password,
-      phone,
-      role = "student",
-      studentClass,
-      studentSection,
-      group,
-      department,
-      qualification,
-      assignedSubject,
-      assignedClass,
-      isApproved = true,
-      fatherName,
-      motherName,
-      dateOfBirth,
-      address,
-      bloodGroup,
-      gender,
-      guardianPhone,
-      guardianRelation,
-      sessionYear,
-      roll,
-      schoolName,
-    } = req.body;
+router.post(
+  "/admin/users",
+  requireAuth,
+  requireRole("admin"),
+  async (req: any, res: any) => {
+    try {
+      const user = req.user;
 
-    if (!name || !email) {
-      return res.status(400).json({ error: "Name and email are required." });
-    }
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          error: "Unauthorized.",
+        });
+      }
 
-    let cleanEmail = String(email).toLowerCase().trim();
-    if (!cleanEmail.includes("@")) {
-      const domain = role === "teacher" ? "@edunexus.tchr.com" : "@edunexus.std.com";
-      cleanEmail = `${cleanEmail}${domain}`;
-    }
+      const {
+        name,
+        email,
+        password,
+        phone,
+        studentClass,
+        studentSection,
+        group,
+        fatherName,
+        motherName,
+        guardianPhone,
+        guardianRelation,
+        dateOfBirth,
+        gender,
+        address,
+        bloodGroup,
+      } = req.body;
 
-    const existing = await prisma.user.findUnique({
-      where: { email: cleanEmail },
-    });
+      // --------------------------------
+      // Validation
+      // --------------------------------
 
-    if (existing) {
-      return res.status(400).json({ error: "User with this email already exists." });
-    }
+      if (!name?.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "Student name is required.",
+        });
+      }
 
-    // Determine password (default to student1234 / teacher1234 if not provided)
-    const rawPassword = password
-      ? String(password).trim()
-      : role === "teacher"
-      ? "teacher1234"
-      : "student1234";
+      if (!email?.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "Student email is required.",
+        });
+      }
 
-    if (rawPassword.length < 8) {
-      return res.status(400).json({ error: "Password must be at least 8 characters long." });
-    }
+      if (!password) {
+        return res.status(400).json({
+          success: false,
+          error: "Student password is required.",
+        });
+      }
 
-    const passwordHash = await hashPassword(rawPassword);
+      if (!studentClass?.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "Student class is required.",
+        });
+      }
 
-    // Auto-calculate roll number if student & not explicitly provided
-    let assignedRoll = roll ? String(roll).trim() : null;
-    if (role === "student" && !assignedRoll && studentClass && studentSection) {
-      const cleanClass = String(studentClass).trim();
-      const cleanSection = String(studentSection).trim();
-      const groupFilter = group ? { group: String(group).trim() } : {};
+      if (!studentSection?.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "Student section is required.",
+        });
+      }
+
+      // --------------------------------
+      // Normalize
+      // --------------------------------
+
+      const formattedEmail = email.trim().toLowerCase();
+      const fullClass = studentClass.trim();
+      const section = studentSection.trim();
+
+      const isClass9or10 = fullClass === "Class 9" || fullClass === "Class 10";
+
+      // --------------------------------
+      // Duplicate email
+      // --------------------------------
+
+      const existingUser = await prisma.user.findFirst({
+        where: {
+          email: {
+            equals: formattedEmail,
+            mode: "insensitive",
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (existingUser) {
+        return res.status(409).json({
+          success: false,
+          error: "A user with this email already exists.",
+        });
+      }
+
+      // --------------------------------
+      // Check section capacity
+      // --------------------------------
+
+      const sectionStudentCount = await prisma.user.count({
+        where: {
+          role: "student",
+          studentClass: fullClass,
+          studentSection: section,
+        },
+      });
+
+      if (sectionStudentCount >= 30) {
+        return res.status(400).json({
+          success: false,
+          error: `${fullClass} - Section ${section} already has 30 students.`,
+        });
+      }
+
+      // --------------------------------
+      // Find next roll number
+      // --------------------------------
 
       const existingStudents = await prisma.user.findMany({
         where: {
-          role: { in: ["student", "STUDENT"] },
-          studentClass: cleanClass,
-          studentSection: cleanSection,
-          ...groupFilter,
+          role: "student",
+          studentClass: fullClass,
+          studentSection: section,
+          roll: {
+            not: null,
+          },
         },
-        select: { roll: true },
+        select: {
+          roll: true,
+        },
       });
 
       let maxRoll = 0;
-      for (const s of existingStudents) {
-        if (s.roll) {
-          const num = parseInt(s.roll.replace(/\D/g, ""), 10);
-          if (!isNaN(num) && num > maxRoll) {
-            maxRoll = num;
+
+      for (const student of existingStudents) {
+        if (student.roll) {
+          const rollNumber = parseInt(
+            String(student.roll).replace(/\D/g, ""),
+            10,
+          );
+
+          if (!isNaN(rollNumber) && rollNumber > maxRoll) {
+            maxRoll = rollNumber;
           }
         }
       }
-      assignedRoll = (maxRoll + 1).toString();
+
+      const nextRollNumber = String(maxRoll + 1);
+      // --------------------------------
+      // Create Better Auth account
+      // --------------------------------
+
+      const newUser = await auth.api.createUser({
+        body: {
+          name: name.trim(),
+          email: formattedEmail,
+          password,
+        },
+      });
+
+      // --------------------------------
+      // Update student information
+      // --------------------------------
+
+      const updatedUser = await prisma.user.update({
+        where: {
+          id: newUser.user.id,
+        },
+        data: {
+          role: "student",
+
+          phone: phone?.trim() || null,
+
+          studentClass: fullClass,
+
+          studentSection: section,
+
+          // AUTO ROLL NUMBER
+          roll: nextRollNumber,
+
+          group: isClass9or10 ? group?.trim() || null : null,
+
+          isApproved: false,
+
+          fatherName: fatherName?.trim() || null,
+
+          motherName: motherName?.trim() || null,
+
+          guardianPhone: guardianPhone?.trim() || null,
+
+          guardianRelation: guardianRelation?.trim() || null,
+
+          dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : null,
+
+          gender: gender?.trim() || null,
+
+          address: address?.trim() || null,
+
+          bloodGroup: bloodGroup?.trim() || null,
+        },
+      });
+
+      // --------------------------------
+      // Response
+      // --------------------------------
+
+      // console.log(
+      //   `Student created successfully:
+      //   Class: ${fullClass}
+      //   Section: ${section}
+      //   Roll: ${nextRollNumber}`,
+      // );
+
+      return res.status(201).json({
+        success: true,
+        message: "Student created successfully.",
+        student: updatedUser,
+      });
+    } catch (error: any) {
+      console.error("Error creating student:", error);
+
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to create student.",
+      });
     }
-
-    let parsedDob: Date | null = null;
-    if (dateOfBirth) {
-      const parsed = new Date(dateOfBirth);
-      if (!isNaN(parsed.getTime())) {
-        parsedDob = parsed;
-      }
-    }
-
-    const user = await prisma.user.create({
-      data: {
-        name: String(name).trim(),
-        email: cleanEmail,
-        phone: phone ? String(phone).trim() : null,
-        role: String(role).trim(),
-        studentClass: studentClass ? String(studentClass).trim() : null,
-        studentSection: studentSection ? String(studentSection).trim() : null,
-        group: group ? String(group).trim() : null,
-        department: department ? String(department).trim() : null,
-        qualification: qualification ? String(qualification).trim() : null,
-        assignedSubject: assignedSubject ? String(assignedSubject).trim() : null,
-        assignedClass: assignedClass ? String(assignedClass).trim() : null,
-        isApproved: Boolean(isApproved),
-        fatherName: fatherName ? String(fatherName).trim() : null,
-        motherName: motherName ? String(motherName).trim() : null,
-        dateOfBirth: parsedDob,
-        address: address ? String(address).trim() : null,
-        bloodGroup: bloodGroup ? String(bloodGroup).trim() : null,
-        gender: gender ? String(gender).trim() : null,
-        guardianPhone: guardianPhone ? String(guardianPhone).trim() : null,
-        guardianRelation: guardianRelation ? String(guardianRelation).trim() : null,
-        sessionYear: sessionYear ? String(sessionYear).trim() : new Date().getFullYear().toString(),
-        roll: assignedRoll,
-        schoolName: schoolName ? String(schoolName).trim() : null,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        phone: true,
-        department: true,
-        qualification: true,
-        studentClass: true,
-        studentSection: true,
-        group: true,
-        isApproved: true,
-        assignedSubject: true,
-        assignedClass: true,
-        availability: true,
-        fatherName: true,
-        motherName: true,
-        dateOfBirth: true,
-        address: true,
-        bloodGroup: true,
-        gender: true,
-        guardianPhone: true,
-        guardianRelation: true,
-        sessionYear: true,
-        roll: true,
-        schoolName: true,
-        createdAt: true,
-      },
-    });
-
-    // Create Better Auth Account credential record so user can log in with password
-    await prisma.account.create({
-      data: {
-        userId: user.id,
-        accountId: user.id,
-        providerId: "credential",
-        password: passwordHash,
-      },
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: `Account created for ${user.name}!`,
-      user,
-      temporaryPassword: rawPassword,
-    });
-  } catch (error: any) {
-    console.error("Error creating user:", error);
-    return res
-      .status(500)
-      .json({ error: error?.message || "Failed to create user account." });
-  }
-});
-
-/**
+  },
+);
+/*
  * PATCH /api/admin/users/:id
  * Updates general user profile info (name, phone, studentClass, studentSection, department, qualification, isApproved, availability).
  */

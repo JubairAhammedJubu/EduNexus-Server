@@ -30,9 +30,7 @@ function normalizeGroup(
   const g = String(raw || "").trim();
   if (!g) return null;
   if (!allowed.includes(g)) {
-    throw new Error(
-      `Invalid group. Allowed: ${allowed.join(" | ")}`,
-    );
+    throw new Error(`Invalid group. Allowed: ${allowed.join(" | ")}`);
   }
   return g;
 }
@@ -89,9 +87,7 @@ router.get(
 
       const teacherIds = [
         ...new Set(
-          classSubjects
-            .map((cs) => cs.teacherId)
-            .filter(Boolean) as string[],
+          classSubjects.map((cs) => cs.teacherId).filter(Boolean) as string[],
         ),
       ];
       const teachers = teacherIds.length
@@ -158,9 +154,7 @@ router.get(
       });
     } catch (err: any) {
       console.error("[routine] get section:", err);
-      res
-        .status(500)
-        .json({ error: err?.message || "Failed to load routine" });
+      res.status(500).json({ error: err?.message || "Failed to load routine" });
     }
   },
 );
@@ -201,7 +195,6 @@ router.put(
         return res.status(400).json({ error: "group is required" });
       }
 
-      // Manual upsert — works on Mongo without fragile compound upsert
       const existing = await prisma.routineSlot.findFirst({
         where: {
           sectionId: section.id,
@@ -210,6 +203,49 @@ router.put(
           periodId: String(periodId),
         },
       });
+
+      const classSubject = await prisma.classSubject.findUnique({
+        where: { id: String(classSubjectId) },
+        select: {
+          id: true,
+          teacherId: true,
+          subject: { select: { name: true } },
+        },
+      });
+      if (!classSubject) {
+        return res.status(404).json({ error: "Class subject not found" });
+      }
+
+      // Same teacher cannot teach two places in the same day + period
+      if (classSubject.teacherId) {
+        const clash = await prisma.routineSlot.findFirst({
+          where: {
+            day: day,
+            periodId: String(periodId),
+            ...(existing ? { NOT: { id: existing.id } } : {}),
+            classSubject: { teacherId: classSubject.teacherId },
+          },
+          include: {
+            section: { include: { schoolClass: true } },
+            classSubject: { include: { subject: true } },
+            period: true,
+          },
+        });
+
+        if (clash) {
+          const place = `${clash.section.schoolClass.name} – ${clash.section.name}`;
+          return res.status(409).json({
+            error: `This teacher is already assigned to ${clash.classSubject.subject.name} in ${place} at the same period.`,
+            clash: {
+              slotId: clash.id,
+              day: clash.day,
+              periodId: clash.periodId,
+              className: place,
+              subject: clash.classSubject.subject.name,
+            },
+          });
+        }
+      }
 
       const slot = existing
         ? await prisma.routineSlot.update({
@@ -226,7 +262,7 @@ router.put(
               sectionId: section.id,
               group: hasGroups ? group : null,
               day: day,
-              periodId: String(periodId),
+              periodId: periodId,
               classSubjectId: String(classSubjectId),
               room: room ? String(room) : null,
             },
@@ -235,13 +271,10 @@ router.put(
       res.json({ slot });
     } catch (err: any) {
       console.error("[routine] set slot:", err);
-      res
-        .status(500)
-        .json({ error: err?.message || "Failed to set slot" });
+      res.status(500).json({ error: err?.message || "Failed to set slot" });
     }
   },
 );
-
 // DELETE /api/admin/routine/slots/:slotId
 router.delete(
   "/admin/routine/slots/:slotId",
@@ -254,66 +287,85 @@ router.delete(
       res.json({ message: "Slot cleared" });
     } catch (err: any) {
       console.error("[routine] delete slot:", err);
-      res
-        .status(500)
-        .json({ error: err?.message || "Failed to clear slot" });
+      res.status(500).json({ error: err?.message || "Failed to clear slot" });
     }
   },
 );
 
 // DELETE /api/admin/routine/slots/:slotId
-router.delete("/admin/routine/slots/:slotId", ...adminOnly, async (req, res) => {
-  try {
-    await prisma.routineSlot.delete({ where: { id: req.params.slotId } });
-    res.json({ message: "Slot cleared" });
-  } catch (err: any) {
-    console.error("[routine] delete slot:", err);
-    res.status(500).json({ error: err?.message || "Failed to clear slot" });
-  }
-});
+router.delete(
+  "/admin/routine/slots/:slotId",
+  ...adminOnly,
+  async (req, res) => {
+    try {
+      await prisma.routineSlot.delete({ where: { id: req.params.slotId } });
+      res.json({ message: "Slot cleared" });
+    } catch (err: any) {
+      console.error("[routine] delete slot:", err);
+      res.status(500).json({ error: err?.message || "Failed to clear slot" });
+    }
+  },
+);
 
 // ── A teacher's personal timetable across all sections ──────────────────
 
 // GET /api/admin/routine/teachers/:teacherId
-router.get("/admin/routine/teachers/:teacherId", ...adminOnly, async (req, res) => {
-  try {
-    const slots = await prisma.routineSlot.findMany({
-      where: { classSubject: { teacherId: req.params.teacherId } },
-      include: {
-        period: true,
-        section: { include: { schoolClass: true } },
-        classSubject: { include: { subject: true } },
-      },
-      orderBy: [{ day: "asc" }, { period: { periodNumber: "asc" } }],
-    });
+router.get(
+  "/admin/routine/teachers/:teacherId",
+  ...adminOnly,
+  async (req, res) => {
+    try {
+      const slots = await prisma.routineSlot.findMany({
+        where: { classSubject: { teacherId: req.params.teacherId } },
+        include: {
+          period: true,
+          section: { include: { schoolClass: true } },
+          classSubject: { include: { subject: true } },
+        },
+        orderBy: [{ day: "asc" }, { period: { periodNumber: "asc" } }],
+      });
 
-    res.json({
-      timetable: slots.map((s) => ({
-        day: s.day,
-        period: s.period.label,
-        startTime: s.period.startTime,
-        endTime: s.period.endTime,
-        class: `${s.section.schoolClass.name} - ${s.section.name}`,
-        subject: s.classSubject.subject.name,
-      })),
-    });
-  } catch (err: any) {
-    console.error("[routine] teacher timetable:", err);
-    res.status(500).json({ error: err?.message || "Failed to load timetable" });
-  }
-});
+      res.json({
+        timetable: slots.map((s) => ({
+          day: s.day,
+          period: s.period.label,
+          startTime: s.period.startTime,
+          endTime: s.period.endTime,
+          class: `${s.section.schoolClass.name} - ${s.section.name}`,
+          subject: s.classSubject.subject.name,
+        })),
+      });
+    } catch (err: any) {
+      console.error("[routine] teacher timetable:", err);
+      res
+        .status(500)
+        .json({ error: err?.message || "Failed to load timetable" });
+    }
+  },
+);
 
 // PATCH /api/admin/periods/:id
 // Body: { periodNumber?, label?, startTime?, endTime?, isBreak? }
 router.patch("/admin/periods/:id", ...adminOnly, async (req, res) => {
   try {
     const { periodNumber, label, startTime, endTime, isBreak } = req.body;
-    const data: any = {};
-    if (periodNumber !== undefined) data.periodNumber = Number(periodNumber);
-    if (label !== undefined) data.label = label;
-    if (startTime !== undefined) data.startTime = startTime;
-    if (endTime !== undefined) data.endTime = endTime;
-    if (isBreak !== undefined) data.isBreak = !!isBreak;
+    const data: Record<string, unknown> = {};
+
+    if (periodNumber !== undefined) {
+      const n = Number(periodNumber);
+      if (!Number.isFinite(n) || n < 1) {
+        return res.status(400).json({ error: "periodNumber must be a positive number" });
+      }
+      data.periodNumber = n;
+    }
+    if (label !== undefined) data.label = String(label).trim();
+    if (startTime !== undefined) data.startTime = String(startTime).trim();
+    if (endTime !== undefined) data.endTime = String(endTime).trim();
+    if (isBreak !== undefined) data.isBreak = Boolean(isBreak);
+
+    if (Object.keys(data).length === 0) {
+      return res.status(400).json({ error: "No fields to update" });
+    }
 
     const period = await prisma.period.update({
       where: { id: req.params.id },
@@ -322,7 +374,12 @@ router.patch("/admin/periods/:id", ...adminOnly, async (req, res) => {
     res.json({ period });
   } catch (err: any) {
     if (err.code === "P2002") {
-      return res.status(409).json({ error: "A period with this number already exists" });
+      return res
+        .status(409)
+        .json({ error: "A period with this number already exists" });
+    }
+    if (err.code === "P2025") {
+      return res.status(404).json({ error: "Period not found" });
     }
     console.error("[periods] update:", err);
     res.status(500).json({ error: err?.message || "Failed to update period" });
