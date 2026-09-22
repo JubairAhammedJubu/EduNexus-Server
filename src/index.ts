@@ -19,6 +19,7 @@ import adminPeriodRoutes from './routes/admin.periods.routes.js';
 import adminRoutineRoutes from "./routes/admin.routine.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
 import feeRoutes from "./routes/fee.routes.js";
+import atRiskRoutes from "./routes/at-risk.routes.js";
 import { prisma } from "./lib/prisma.js";
 
 const app = express();
@@ -61,6 +62,7 @@ app.use("/api", examRoutes);
 app.use("/api", adminRoutes);
 app.use("/api", attendanceRoutes);
 app.use("/api", feeRoutes);
+app.use("/api", atRiskRoutes);
 app.use("/api", SubjectRequestsRoutes)
 app.use("/api", adminClassRoutes);
 app.use("/api", adminSubjectRoutes);
