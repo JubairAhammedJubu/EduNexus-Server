@@ -203,93 +203,273 @@ router.get(
   requireRole("teacher", "admin"),
   async (req, res) => {
     try {
-      const page = Math.max(1, parseInt(req.query.page as string) || 1);
-      const limit = Math.max(1, parseInt(req.query.limit as string) || 20);
-      const search = ((req.query.search as string) || "").trim();
-      const studentClass = ((req.query.studentClass as string) || "").trim();
-      const group = ((req.query.group as string) || "").trim();
+      const user = req.user;
 
-      const where: any = { role: "student" };
-
-      if (studentClass && studentClass !== "All Classes") {
-        where.studentClass = {
-          contains: studentClass,
-          mode: "insensitive",
-        };
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          error: "Unauthorized",
+        });
       }
 
-      if (group && group !== "All" && group !== "All Groups") {
+      const page = Math.max(
+        1,
+        parseInt(req.query.page as string) || 1
+      );
+
+      const limit = Math.max(
+        1,
+        parseInt(req.query.limit as string) || 10
+      );
+
+      const search = ((req.query.search as string) || "").trim();
+      const studentClass = (
+        (req.query.studentClass as string) || ""
+      ).trim();
+      const group = ((req.query.group as string) || "").trim();
+
+      const where: any = {
+        role: "student",
+      };
+
+      // Teacher access restriction
+      if (user.role === "teacher") {
+        const assignedSections =
+          await prisma.classSection.findMany({
+            where: {
+              teacherId: user.id,
+              isActive: true,
+            },
+            select: {
+              name: true,
+              schoolClass: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          });
+
+        if (assignedSections.length === 0) {
+          return res.json({
+            success: true,
+            students: [],
+            pagination: {
+              total: 0,
+              page,
+              limit,
+              totalPages: 1,
+            },
+            classes: [],
+            groups: [],
+            sections: [],
+          });
+        }
+
+        where.AND = [
+          {
+            OR: assignedSections.map((section) => ({
+              studentClass: section.schoolClass.name,
+              studentSection: section.name,
+            })),
+          },
+        ];
+      }
+
+      // Class filter
+      if (
+        studentClass &&
+        studentClass !== "All Classes"
+      ) {
+        if (!where.AND) {
+          where.AND = [];
+        }
+
+        where.AND.push({
+          studentClass: {
+            contains: studentClass,
+            mode: "insensitive",
+          },
+        });
+      }
+
+      // Group filter
+      if (
+        group &&
+        group !== "All" &&
+        group !== "All Groups"
+      ) {
         where.group = {
           contains: group,
           mode: "insensitive",
         };
       }
 
+      // Search
       if (search) {
-        where.OR = [
-          { name: { contains: search, mode: "insensitive" } },
-          { email: { contains: search, mode: "insensitive" } },
-          { studentClass: { contains: search, mode: "insensitive" } },
-          { studentSection: { contains: search, mode: "insensitive" } },
-          { group: { contains: search, mode: "insensitive" } },
-          { department: { contains: search, mode: "insensitive" } },
-        ];
+        if (!where.AND) {
+          where.AND = [];
+        }
+
+        where.AND.push({
+          OR: [
+            {
+              name: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              email: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              studentClass: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              studentSection: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              group: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+            {
+              department: {
+                contains: search,
+                mode: "insensitive",
+              },
+            },
+          ],
+        });
       }
 
       const skip = (page - 1) * limit;
 
       const [totalCount, students] = await Promise.all([
-        prisma.user.count({ where }),
+        prisma.user.count({
+          where,
+        }),
+
         prisma.user.findMany({
           where,
           skip,
           take: limit,
-          orderBy: { name: "asc" },
+          orderBy: {
+            name: "asc",
+          },
         }),
       ]);
 
-      const [distinctClasses, distinctGroups] = await Promise.all([
-        prisma.user.findMany({
-          where: { role: "student", studentClass: { not: null } },
-          select: { studentClass: true },
-          distinct: ["studentClass"],
-        }),
-        prisma.user.findMany({
-          where: { role: "student", group: { not: null } },
-          select: { group: true },
-          distinct: ["group"],
-        }),
-      ]);
+      const distinctClasses = await prisma.user.findMany({
+        where: {
+          ...where,
+          studentClass: {
+            not: null,
+          },
+        },
+        select: {
+          studentClass: true,
+        },
+        distinct: ["studentClass"],
+      });
 
-      const defaultClasses = [
-        "All Classes",
-        "Class 6",
-        "Class 7",
-        "Class 8",
-        "Class 9",
-        "Class 10",
-      ];
-      const classSet = new Set<string>(defaultClasses);
-      distinctClasses.forEach((c) => {
-        if (c.studentClass && c.studentClass.trim()) {
-          classSet.add(c.studentClass.trim());
+      const distinctGroups = await prisma.user.findMany({
+        where: {
+          ...where,
+          group: {
+            not: null,
+          },
+        },
+        select: {
+          group: true,
+        },
+        distinct: ["group"],
+      });
+
+      const classSet = new Set<string>();
+
+      if (user.role === "admin") {
+        [
+          "All Classes",
+          "Class 6",
+          "Class 7",
+          "Class 8",
+          "Class 9",
+          "Class 10",
+        ].forEach((item) => classSet.add(item));
+      } else {
+        classSet.add("All Classes");
+      }
+
+      distinctClasses.forEach((item) => {
+        if (item.studentClass?.trim()) {
+          classSet.add(item.studentClass.trim());
         }
       });
 
-      const defaultGroups = [
-        "All Groups",
-        "Science",
-        "Business Studies",
-        "Humanities",
-      ];
-      const groupSet = new Set<string>(defaultGroups);
-      distinctGroups.forEach((g) => {
-        if (g.group && g.group.trim()) {
-          groupSet.add(g.group.trim());
+      const groupSet = new Set<string>();
+
+      if (user.role === "admin") {
+        [
+          "All Groups",
+          "Science",
+          "Business Studies",
+          "Humanities",
+        ].forEach((item) => groupSet.add(item));
+      } else {
+        groupSet.add("All Groups");
+      }
+
+      distinctGroups.forEach((item) => {
+        if (item.group?.trim()) {
+          groupSet.add(item.group.trim());
         }
       });
 
-      const totalPages = Math.ceil(totalCount / limit) || 1;
+      let sections: string[] = [];
+
+      if (user.role === "teacher") {
+        const assignedSections =
+          await prisma.classSection.findMany({
+            where: {
+              teacherId: user.id,
+              isActive: true,
+            },
+            select: {
+              name: true,
+            },
+          });
+
+        sections = [
+          "All Sections",
+          ...Array.from(
+            new Set(
+              assignedSections.map(
+                (section) => section.name
+              )
+            )
+          ),
+        ];
+      } else {
+        sections = [
+          "All Sections",
+          "Section A",
+          "Section B",
+        ];
+      }
+
+      const totalPages =
+        Math.ceil(totalCount / limit) || 1;
 
       return res.json({
         success: true,
@@ -302,17 +482,23 @@ router.get(
         },
         classes: Array.from(classSet),
         groups: Array.from(groupSet),
+        sections,
       });
     } catch (error: any) {
-      console.error("Error fetching teacher students:", error);
+      console.error(
+        "Error fetching teacher students:",
+        error
+      );
+
       return res.status(500).json({
         success: false,
-        error: error?.message || "Failed to fetch student list",
+        error:
+          error?.message ||
+          "Failed to fetch student list",
       });
     }
   }
 );
-
 /**
  * GET /api/admin/user-2fa-status?email=...
  * Admin lookup for user authenticator app status.
