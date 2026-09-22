@@ -867,6 +867,290 @@ router.get(
  * Returns personal attendance history and attendance summary stats
  * for the authenticated student (or demo student).
  */
+router.get("/student/attendance", requireAuth,requireRole("student"), async (req: any, res: any) => {
+  try {
+    // -----------------------------------
+    // 1. Get authenticated user
+    // -----------------------------------
+    const user = req.user;
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: "Unauthorized: Please log in to view your attendance.",
+      });
+    }
+
+    // -----------------------------------
+    // 2. Pagination
+    // -----------------------------------
+    const page = Math.max(
+      1,
+      Number.parseInt(String(req.query.page || "1"), 10) || 1
+    );
+
+    const limit = Math.min(
+      100,
+      Math.max(
+        1,
+        Number.parseInt(String(req.query.limit || "10"), 10) || 10
+      )
+    );
+
+    const skip = (page - 1) * limit;
+
+    // -----------------------------------
+    // 3. Filters
+    // -----------------------------------
+    const statusFilter = String(req.query.status || "")
+      .trim()
+      .toUpperCase();
+
+    const searchTerm = String(req.query.search || "")
+      .trim()
+      .toLowerCase();
+
+    // -----------------------------------
+    // 4. Find student profile
+    // -----------------------------------
+    const currentUserId = user.id;
+    const currentUserEmail = String(user.email || "").toLowerCase();
+
+    const studentUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          {
+            id: currentUserId,
+          },
+          {
+            email: {
+              equals: currentUserEmail,
+              mode: "insensitive",
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        studentClass: true,
+        studentSection: true,
+        department: true,
+      },
+    });
+
+    if (!studentUser) {
+      return res.status(404).json({
+        success: false,
+        error: "Student profile not found.",
+      });
+    }
+
+    // -----------------------------------
+    // 5. Base attendance filter
+    // -----------------------------------
+    const where: any = {
+      OR: [
+        {
+          studentId: studentUser.id,
+        },
+        {
+          studentEmail: {
+            equals: studentUser.email,
+            mode: "insensitive",
+          },
+        },
+      ],
+    };
+
+    // -----------------------------------
+    // 6. Status filter
+    // -----------------------------------
+    if (
+      statusFilter &&
+      ["PRESENT", "LATE", "ABSENT"].includes(statusFilter)
+    ) {
+      where.status = statusFilter;
+    }
+
+    // -----------------------------------
+    // 7. Search filter
+    // -----------------------------------
+    if (searchTerm) {
+      where.AND = [
+        {
+          OR: [
+            {
+              grade: {
+                contains: searchTerm,
+                mode: "insensitive",
+              },
+            },
+            {
+              section: {
+                contains: searchTerm,
+                mode: "insensitive",
+              },
+            },
+            {
+              group: {
+                contains: searchTerm,
+                mode: "insensitive",
+              },
+            },
+            {
+              teacherEmail: {
+                contains: searchTerm,
+                mode: "insensitive",
+              },
+            },
+            {
+              studentName: {
+                contains: searchTerm,
+                mode: "insensitive",
+              },
+            },
+          ],
+        },
+      ];
+    }
+
+    // -----------------------------------
+    // 8. Get total count + paginated records
+    // -----------------------------------
+    const [totalRecords, records] = await Promise.all([
+      prisma.attendance.count({
+        where,
+      }),
+
+      prisma.attendance.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: {
+          date: "desc",
+        },
+      }),
+    ]);
+
+    // -----------------------------------
+    // 9. Get full attendance history
+    //    for summary calculation
+    // -----------------------------------
+    const allAttendance = await prisma.attendance.findMany({
+      where: {
+        OR: [
+          {
+            studentId: studentUser.id,
+          },
+          {
+            studentEmail: {
+              equals: studentUser.email,
+              mode: "insensitive",
+            },
+          },
+        ],
+      },
+      select: {
+        status: true,
+      },
+    });
+
+    // -----------------------------------
+    // 10. Calculate summary
+    // -----------------------------------
+    const total = allAttendance.length;
+
+    const present = allAttendance.filter(
+      (record) => record.status === "PRESENT"
+    ).length;
+
+    const late = allAttendance.filter(
+      (record) => record.status === "LATE"
+    ).length;
+
+    const absent = allAttendance.filter(
+      (record) => record.status === "ABSENT"
+    ).length;
+
+    const attendanceRate =
+      total > 0
+        ? Math.round(((present + late) / total) * 100)
+        : 100;
+
+    // -----------------------------------
+    // 11. Format records
+    // -----------------------------------
+    const formattedRecords = records.map((record) => ({
+      id: record.id,
+
+      date:
+        record.date instanceof Date
+          ? record.date.toISOString()
+          : new Date(record.date).toISOString(),
+
+      status: record.status,
+
+      grade: record.grade,
+      section: record.section,
+      group: record.group || undefined,
+
+      studentName: record.studentName || undefined,
+
+      teacherEmail: record.teacherEmail || undefined,
+    }));
+
+    // -----------------------------------
+    // 12. Pagination info
+    // -----------------------------------
+    const totalPages = Math.ceil(totalRecords / limit);
+
+    // -----------------------------------
+    // 13. Response
+    // -----------------------------------
+    return res.json({
+      success: true,
+
+      student: {
+        id: studentUser.id,
+        name: studentUser.name,
+        email: studentUser.email,
+        studentClass: studentUser.studentClass,
+        studentSection: studentUser.studentSection,
+        department: studentUser.department,
+      },
+
+      records: formattedRecords,
+
+      summary: {
+        total,
+        present,
+        late,
+        absent,
+        attendanceRate,
+      },
+
+      pagination: {
+        page,
+        limit,
+        totalRecords,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1,
+      },
+    });
+  } catch (error: any) {
+    console.error("Error fetching student attendance:", error);
+
+    return res.status(500).json({
+      success: false,
+      error:
+        error?.message || "Failed to fetch student attendance",
+    });
+  }
+});
+
 router.get(
   "/teacher/students",
   requireAuth,
