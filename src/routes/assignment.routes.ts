@@ -3,6 +3,7 @@ import multer from "multer";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
 import { getMaxPdfSizeBytes, uploadPdfToR2 } from "../lib/r2.js";
+import { generateFeedbackDraft } from "../lib/ai-insight.js";
 
 const router = Router();
 const teacherOnly = [requireAuth, requireRole("teacher", "admin")];
@@ -804,4 +805,179 @@ router.delete("/teacher/assignments/:id", ...teacherOnly, async (req, res) => {
     });
   }
 });
+
+function parseTeacherMarks(value: unknown, totalMarks: number): number | null {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(numeric) || numeric < 0 || numeric > totalMarks) {
+    return null;
+  }
+  return numeric;
+}
+
+async function loadGradableSubmission(
+  req: { user?: { email?: string | null } },
+  assignmentId: string,
+  submissionId: string
+) {
+  if (!/^[a-f\d]{24}$/i.test(assignmentId) || !/^[a-f\d]{24}$/i.test(submissionId)) {
+    return { ok: false as const, errorStatus: 400, error: "Invalid assignment or submission id." };
+  }
+
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      subject: true,
+      totalMarks: true,
+      teacherEmail: true,
+    },
+  });
+
+  if (!assignment) {
+    return { ok: false as const, errorStatus: 404, error: "Assignment not found." };
+  }
+
+  const isAdmin = (req.user as { role?: string } | undefined)?.role === "admin";
+  if (!isAdmin && assignment.teacherEmail !== req.user?.email) {
+    return {
+      ok: false as const,
+      errorStatus: 403,
+      error: "You are not authorized to grade this assignment.",
+    };
+  }
+
+  const submission = await prisma.submission.findFirst({
+    where: { id: submissionId, assignmentId },
+    include: { student: { select: { name: true } } },
+  });
+
+  if (!submission) {
+    return { ok: false as const, errorStatus: 404, error: "Submission not found." };
+  }
+
+  return { ok: true as const, assignment, submission };
+}
+
+/**
+ * POST /api/teacher/assignments/:assignmentId/submissions/:submissionId/feedback-draft
+ *
+ * Drafts a comment from the assignment context and the score the teacher
+ * typed. Nothing is saved. The teacher edits the draft, then saves it
+ * with the grade endpoint.
+ */
+router.post(
+  "/teacher/assignments/:assignmentId/submissions/:submissionId/feedback-draft",
+  ...teacherOnly,
+  async (req, res) => {
+    try {
+      const loaded = await loadGradableSubmission(
+        req,
+        req.params.assignmentId,
+        req.params.submissionId
+      );
+      if (!loaded.ok) {
+        return res.status(loaded.errorStatus).json({ success: false, error: loaded.error });
+      }
+
+      const marks = parseTeacherMarks(req.body?.marks, loaded.assignment.totalMarks);
+      if (marks === null) {
+        return res.status(400).json({
+          success: false,
+          error: `Enter a whole-number score from 0 to ${loaded.assignment.totalMarks} before drafting feedback.`,
+        });
+      }
+
+      const draft = await generateFeedbackDraft({
+        studentName: loaded.submission.student?.name || "the student",
+        assignmentTitle: loaded.assignment.title,
+        subject: loaded.assignment.subject,
+        assignmentDescription: loaded.assignment.description,
+        marks,
+        totalMarks: loaded.assignment.totalMarks,
+      });
+
+      return res.json({
+        success: true,
+        draft: draft.text,
+        source: draft.source,
+        marks,
+        totalMarks: loaded.assignment.totalMarks,
+      });
+    } catch (error: any) {
+      console.error("Error drafting assignment feedback:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to draft feedback.",
+      });
+    }
+  }
+);
+
+/**
+ * PATCH /api/teacher/assignments/:assignmentId/submissions/:submissionId/grade
+ *
+ * Saves the score and comment the teacher confirmed. The score always
+ * comes from this request, never from the draft endpoint.
+ */
+router.patch(
+  "/teacher/assignments/:assignmentId/submissions/:submissionId/grade",
+  ...teacherOnly,
+  async (req, res) => {
+    try {
+      const loaded = await loadGradableSubmission(
+        req,
+        req.params.assignmentId,
+        req.params.submissionId
+      );
+      if (!loaded.ok) {
+        return res.status(loaded.errorStatus).json({ success: false, error: loaded.error });
+      }
+
+      const marks = parseTeacherMarks(req.body?.marks, loaded.assignment.totalMarks);
+      const feedback = typeof req.body?.feedback === "string" ? req.body.feedback.trim() : "";
+
+      if (marks === null) {
+        return res.status(400).json({
+          success: false,
+          error: `Score must be a whole number from 0 to ${loaded.assignment.totalMarks}.`,
+        });
+      }
+      if (!feedback || feedback.length > 1000) {
+        return res.status(400).json({
+          success: false,
+          error: "Add a feedback comment (1000 characters or fewer) before saving. Review any draft first.",
+        });
+      }
+
+      const submission = await prisma.submission.update({
+        where: { id: loaded.submission.id },
+        data: {
+          marks,
+          feedback,
+          status: "GRADED",
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: "Grade saved. The student can now see this score and comment.",
+        submission: {
+          id: submission.id,
+          marks: submission.marks,
+          feedback: submission.feedback,
+          status: submission.status,
+        },
+      });
+    } catch (error: any) {
+      console.error("Error saving assignment grade:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to save grade.",
+      });
+    }
+  }
+);
+
 export default router;
