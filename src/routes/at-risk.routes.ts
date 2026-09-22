@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
 import { computeAtRiskScore, type RiskLevel } from "../lib/at-risk.js";
-import { generateAtRiskInsight, AiInsightNotConfiguredError } from "../lib/ai-insight.js";
+import { generatePerformanceInsight } from "../lib/ai-insight.js";
 
 const router = Router();
 const staffOnly = [requireAuth, requireRole("teacher", "admin")];
@@ -221,8 +221,9 @@ router.post("/teacher/at-risk/:studentId/insight", ...staffOnly, async (req, res
       });
     }
 
-    const insight = await generateAtRiskInsight({
+    const insight = await generatePerformanceInsight({
       studentName: student.name,
+      perspective: "teacher",
       riskLevel: score.riskLevel,
       attendanceRate: score.attendanceRate,
       averageScorePercent: score.averageScorePercent,
@@ -230,14 +231,13 @@ router.post("/teacher/at-risk/:studentId/insight", ...staffOnly, async (req, res
       reasons: score.reasons,
     });
 
-    return res.json({ success: true, insight, riskLevel: score.riskLevel });
+    return res.json({
+      success: true,
+      insight: insight.text,
+      source: insight.source,
+      riskLevel: score.riskLevel,
+    });
   } catch (error: any) {
-    if (error instanceof AiInsightNotConfiguredError) {
-      return res.status(503).json({
-        success: false,
-        error: "AI insights aren't configured on this server yet (missing GROQ_API_KEY).",
-      });
-    }
     console.error("Error generating at-risk insight:", error);
     return res.status(500).json({
       success: false,
