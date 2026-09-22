@@ -2,7 +2,7 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
 
 export type InsightPerspective = "teacher" | "student";
-export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
+export type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "INSUFFICIENT_DATA";
 
 export interface PerformanceInsightRequest {
   studentName: string;
@@ -65,6 +65,14 @@ function formatMetric(value: number | null): string {
 
 /** Growth areas named from the numbers only — never a risk label. */
 function describeGrowthFocus(input: PerformanceInsightRequest): string {
+  const hasAnyMetric =
+    input.attendanceRate !== null ||
+    input.averageScorePercent !== null ||
+    input.assignmentCompletionRate !== null;
+  if (input.riskLevel === "INSUFFICIENT_DATA" || !hasAnyMetric) {
+    return "Not enough history is recorded yet. Encourage a calm start. Do not invent a pattern.";
+  }
+
   const areas: string[] = [];
   if (input.attendanceRate !== null && input.attendanceRate < 85) {
     areas.push("showing up consistently");
@@ -161,7 +169,14 @@ function buildFallbackInsight(input: PerformanceInsightRequest): string {
   let openLine: string;
   let suggestion: string;
 
-  if (input.riskLevel === "HIGH") {
+  if (input.riskLevel === "INSUFFICIENT_DATA") {
+    openLine = isStudent
+      ? "You're just getting started, and this page will get more useful as your classes, scores, and assignments are recorded."
+      : `There isn't enough recorded history yet to describe a pattern for ${input.studentName}.`;
+    suggestion = isStudent
+      ? "A good first step is to keep showing up and turn in the next assignment. The picture gets clearer from there."
+      : "Recording the next class, published result, or assignment will make this overview specific enough to act on.";
+  } else if (input.riskLevel === "HIGH") {
     openLine = isStudent
       ? "You've got a clear place to grow, and a little focused effort this week can move these numbers."
       : `A few things in ${input.studentName}'s recent numbers are worth checking in on.`;

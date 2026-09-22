@@ -52,14 +52,25 @@ router.get("/teacher/at-risk", ...staffOnly, async (req, res) => {
 
     // Bulk-fetch everything up front (3 queries total) instead of
     // per-student round trips.
+    const emailToId = new Map(students.map((s) => [s.email.toLowerCase(), s.id]));
+    const emails = students.map((s) => s.email.toLowerCase());
+
     const [attendanceRecords, results, submissions] = await Promise.all([
       prisma.attendance.findMany({
-        where: { studentId: { in: studentIds } },
-        select: { studentId: true, status: true },
+        where: {
+          OR: [
+            { studentId: { in: studentIds } },
+            { studentEmail: { in: emails, mode: "insensitive" } },
+          ],
+        },
+        select: { studentId: true, studentEmail: true, status: true },
       }),
       prisma.studentResult.findMany({
-        where: { studentId: { in: studentIds }, status: "PUBLISHED" },
-        select: { studentId: true, score: true, total: true },
+        where: {
+          status: "PUBLISHED",
+          OR: [{ studentId: { in: studentIds } }, { studentEmail: { in: emails } }],
+        },
+        select: { studentId: true, studentEmail: true, score: true, total: true },
       }),
       prisma.submission.findMany({
         where: { studentId: { in: studentIds } },
@@ -91,21 +102,30 @@ router.get("/teacher/at-risk", ...staffOnly, async (req, res) => {
       assignmentCountByClass.set(key, (assignmentCountByClass.get(key) ?? 0) + 1);
     }
 
+    const resolveStudentId = (studentId: string, studentEmail: string) => {
+      if (studentIds.includes(studentId)) return studentId;
+      return emailToId.get(studentEmail.toLowerCase()) ?? null;
+    };
+
     const attendanceByStudent = new Map<string, { total: number; presentOrLate: number }>();
     for (const r of attendanceRecords) {
-      const entry = attendanceByStudent.get(r.studentId) ?? { total: 0, presentOrLate: 0 };
+      const ownerId = resolveStudentId(r.studentId, r.studentEmail);
+      if (!ownerId) continue;
+      const entry = attendanceByStudent.get(ownerId) ?? { total: 0, presentOrLate: 0 };
       entry.total += 1;
       if (r.status === "PRESENT" || r.status === "LATE") entry.presentOrLate += 1;
-      attendanceByStudent.set(r.studentId, entry);
+      attendanceByStudent.set(ownerId, entry);
     }
 
     const resultsByStudent = new Map<string, { count: number; totalPercent: number }>();
     for (const r of results) {
       if (r.total <= 0) continue;
-      const entry = resultsByStudent.get(r.studentId) ?? { count: 0, totalPercent: 0 };
+      const ownerId = resolveStudentId(r.studentId, r.studentEmail);
+      if (!ownerId) continue;
+      const entry = resultsByStudent.get(ownerId) ?? { count: 0, totalPercent: 0 };
       entry.count += 1;
       entry.totalPercent += (r.score / r.total) * 100;
-      resultsByStudent.set(r.studentId, entry);
+      resultsByStudent.set(ownerId, entry);
     }
 
     const submissionCountByStudent = new Map<string, number>();
@@ -169,19 +189,35 @@ router.post("/teacher/at-risk/:studentId/insight", ...staffOnly, async (req, res
 
     const student = await prisma.user.findUnique({
       where: { id: studentId },
-      select: { id: true, name: true, role: true, studentClass: true, studentSection: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        studentClass: true,
+        studentSection: true,
+      },
     });
     if (!student || student.role !== "student") {
       return res.status(404).json({ success: false, error: "Student not found." });
     }
 
+    const email = student.email.toLowerCase();
     const [attendanceRecords, results, assignmentsAssigned, submissionsCount] = await Promise.all([
       prisma.attendance.findMany({
-        where: { studentId },
+        where: {
+          OR: [
+            { studentId },
+            { studentEmail: { equals: email, mode: "insensitive" } },
+          ],
+        },
         select: { status: true },
       }),
       prisma.studentResult.findMany({
-        where: { studentId, status: "PUBLISHED" },
+        where: {
+          status: "PUBLISHED",
+          OR: [{ studentId }, { studentEmail: email }],
+        },
         select: { score: true, total: true },
       }),
       prisma.assignment.count({
@@ -213,13 +249,6 @@ router.post("/teacher/at-risk/:studentId/insight", ...staffOnly, async (req, res
       assignmentsAssigned,
       assignmentsSubmitted: submissionsCount,
     });
-
-    if (score.riskLevel === "INSUFFICIENT_DATA") {
-      return res.status(400).json({
-        success: false,
-        error: "Not enough recorded data yet to generate an insight for this student.",
-      });
-    }
 
     const insight = await generatePerformanceInsight({
       studentName: student.name,

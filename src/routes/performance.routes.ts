@@ -28,19 +28,35 @@ async function loadOwnStudentScore(
 ): Promise<{ studentName: string; score: AtRiskScore } | null> {
   const student = await prisma.user.findUnique({
     where: { id: studentId },
-    select: { id: true, name: true, role: true, studentClass: true, studentSection: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        studentClass: true,
+        studentSection: true,
+      },
   });
   if (!student || student.role !== "student") {
     return null;
   }
 
+  const email = student.email.toLowerCase();
   const [attendanceRecords, results, assignmentsAssigned, submissionsCount] = await Promise.all([
     prisma.attendance.findMany({
-      where: { studentId },
+      where: {
+        OR: [
+          { studentId },
+          { studentEmail: { equals: email, mode: "insensitive" } },
+        ],
+      },
       select: { status: true },
     }),
     prisma.studentResult.findMany({
-      where: { studentId, status: "PUBLISHED" },
+      where: {
+        status: "PUBLISHED",
+        OR: [{ studentId }, { studentEmail: email }],
+      },
       select: { score: true, total: true },
     }),
     prisma.assignment.count({
@@ -128,13 +144,6 @@ router.post("/student/performance/insight", ...studentOnly, async (req, res) => 
     }
 
     const { studentName, score } = loaded;
-
-    if (score.riskLevel === "INSUFFICIENT_DATA") {
-      return res.status(400).json({
-        success: false,
-        error: "Not enough recorded attendance, results, or assignment data yet to generate an insight.",
-      });
-    }
 
     const insight = await generatePerformanceInsight({
       studentName,
