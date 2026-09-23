@@ -64,6 +64,38 @@ router.post("/teacher/results", ...teacherOrAdmin, async (req, res) => {
         error: "Score cannot be greater than total marks.",
       });
     }
+    async function teacherCanAccessStudent(
+      teacherId: string,
+      studentId: string,
+    ): Promise<boolean> {
+      const student = await prisma.user.findUnique({
+        where: { id: studentId },
+        select: { studentClass: true, studentSection: true, role: true },
+      });
+      if (!student || student.role !== "student") return false;
+
+      const classSubjects = await prisma.classSubject.findMany({
+        where: {
+          OR: [{ teacherId }, { substituteTeacherId: teacherId }],
+        },
+        select: { sectionId: true },
+      });
+      const sectionIds = classSubjects
+        .map((c) => c.sectionId)
+        .filter(Boolean) as string[];
+      if (!sectionIds.length) return false;
+
+      const sections = await prisma.classSection.findMany({
+        where: { id: { in: sectionIds } },
+        include: { schoolClass: { select: { name: true } } },
+      });
+
+      return sections.some(
+        (s) =>
+          s.schoolClass.name === student.studentClass &&
+          s.name === student.studentSection,
+      );
+    }
 
     const result = await prisma.studentResult.create({
       data: {
@@ -109,30 +141,100 @@ router.post("/teacher/results", ...teacherOrAdmin, async (req, res) => {
  * ?status=PUBLISHED
  * ?assignmentId=assignment-id
  */
-router.get("/teacher/results", requireAuth, async (req, res) => {
+router.get("/teacher/results", ...teacherOrAdmin, async (req, res) => {
   try {
     const { studentEmail, status, assignmentId } = req.query;
+    const role = (req.user as { role?: string }).role;
+    const isAdmin = role === "admin";
+
+    let allowedClassNames: string[] | null = null;
+    let allowedSectionKeys: Set<string> | null = null; // "Class 9|Section A"
+
+    if (!isAdmin) {
+      const teacherId = req.user!.id;
+
+      // Subject teacher only (not class teacher)
+      const classSubjects = await prisma.classSubject.findMany({
+        where: {
+          OR: [{ teacherId }, { substituteTeacherId: teacherId }],
+        },
+        select: { sectionId: true },
+      });
+
+      const sectionIds = [
+        ...new Set(classSubjects.map((cs) => cs.sectionId).filter(Boolean)),
+      ] as string[];
+
+      if (sectionIds.length === 0) {
+        return res.json({ success: true, results: [] });
+      }
+
+      const sections = await prisma.classSection.findMany({
+        where: { id: { in: sectionIds } },
+        include: {
+          schoolClass: { select: { name: true } },
+        },
+      });
+
+      allowedClassNames = [...new Set(sections.map((s) => s.schoolClass.name))];
+      allowedSectionKeys = new Set(
+        sections.map((s) => `${s.schoolClass.name}|${s.name}`),
+      );
+    }
 
     const whereClause: any = {};
 
     if (studentEmail && typeof studentEmail === "string") {
       whereClause.studentEmail = studentEmail.trim().toLowerCase();
     }
-
     if (status && typeof status === "string") {
       whereClause.status = status.trim().toUpperCase();
     }
-
     if (assignmentId && typeof assignmentId === "string") {
       whereClause.assignmentId = assignmentId.trim();
     }
 
-    const results = await prisma.studentResult.findMany({
+    // Restrict by class names the teacher teaches
+    if (allowedClassNames) {
+      whereClause.studentClass = { in: allowedClassNames };
+    }
+
+    let results = await prisma.studentResult.findMany({
       where: whereClause,
-      orderBy: {
-        createdAt: "desc",
-      },
+      orderBy: { createdAt: "desc" },
     });
+
+    // Tighten by section via User profile (if you store studentSection)
+    if (allowedSectionKeys && results.length > 0) {
+      const emails = [
+        ...new Set(results.map((r) => r.studentEmail.toLowerCase())),
+      ];
+      const students = await prisma.user.findMany({
+        where: {
+          email: { in: emails },
+          role: "student",
+        },
+        select: {
+          email: true,
+          studentClass: true,
+          studentSection: true,
+        },
+      });
+
+      const okEmail = new Set(
+        students
+          .filter((u) => {
+            const cls = u.studentClass || "";
+            const sec = u.studentSection || "";
+            return allowedSectionKeys!.has(`${cls}|${sec}`);
+          })
+          .map((u) => u.email.toLowerCase()),
+      );
+
+      results = results.filter((r) =>
+        okEmail.has(r.studentEmail.toLowerCase()),
+      );
+    }
 
     return res.json({
       success: true,
@@ -140,13 +242,13 @@ router.get("/teacher/results", requireAuth, async (req, res) => {
     });
   } catch (error: any) {
     console.error("Error fetching results:", error);
-
     return res.status(500).json({
       success: false,
       error: error?.message || "Failed to fetch results.",
     });
   }
 });
+
 router.delete("/teacher/results/:id", ...teacherOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
