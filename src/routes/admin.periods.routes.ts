@@ -372,17 +372,24 @@ router.get(
 
       const grid = emptyGrid();
 
-      const flatSlots = slots.map((s: any) => {
+          const flatSlots = slots.map((s: any) => {
         const sectionId = s.sectionId || s.classSubject?.sectionId;
         const sec = sectionId ? sectionMap[sectionId] : null;
         const isSubstitute =
           s.classSubject?.substituteTeacherId === teacherId &&
           s.classSubject?.teacherId !== teacherId;
 
+        // Class 9–10 stream: prefer slot.group, else subject.group.name
+        const group =
+          s.group ||
+          s.classSubject?.subject?.group?.name ||
+          null;
+
         const cell = {
           subject: s.classSubject?.subject?.name ?? "—",
           className: sec?.className ?? "—",
           sectionName: sec?.sectionName ?? "—",
+          group, // "Science" | "Business Studies" | "Humanities" | null
           room: s.room ?? null,
           role: isSubstitute ? "SUBSTITUTE" : "PRIMARY",
         };
@@ -398,7 +405,6 @@ router.get(
           ...cell,
         };
       });
-
       return res.json({
         success: true,
         periods,
