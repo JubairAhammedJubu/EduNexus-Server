@@ -523,3 +523,18 @@ model RoutineSlot {
   @@index([sectionId,group])
   @@map("routine_slots")
 }
+
+model Event {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  category    String   // "Holiday" | "Exam" | "Sports" | "Meeting" | "Academic"
+  startDate   String
+  endDate     String?
+  location    String
+  audience    String   @default("All") // "All" | "Students" | "Teachers"
+  description String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("events")
+}
