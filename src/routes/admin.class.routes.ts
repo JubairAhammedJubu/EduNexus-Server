@@ -205,13 +205,147 @@ router.post("/admin/classes/seed", ...adminOnly, async (req, res) => {
   }
 });
 
-// router.delete("/admin/classes/:id",async(req,res)=>{
-//   const {id} = req.params;
-//   const dataDelete = await prisma.schoolClass.delete({
-//     where:{id: id},
-//   })
-//   res.send(dataDelete)
-// })
+// ── Edit & Delete Class Endpoints ──────────────────────────────────────────
+
+// PATCH /api/admin/classes/:id
+router.patch("/admin/classes/:id", ...adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const name = req.body.name != null ? String(req.body.name).trim() : undefined;
+    const order = req.body.order != null ? Number(req.body.order) : undefined;
+    const sessionYear =
+      req.body.sessionYear != null ? String(req.body.sessionYear).trim() : undefined;
+
+    const existingClass = await prisma.schoolClass.findUnique({ where: { id } });
+    if (!existingClass) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    const updateData: any = {};
+    if (name !== undefined) updateData.name = name;
+    if (order !== undefined) updateData.order = order;
+    if (sessionYear !== undefined) updateData.sessionYear = sessionYear;
+
+    const checkName = name ?? existingClass.name;
+    const checkOrder = order ?? existingClass.order;
+    updateData.hasGroups = classHasGroups(checkName, checkOrder);
+
+    const updated = await prisma.schoolClass.update({
+      where: { id },
+      data: updateData,
+    });
+
+    res.json({
+      class: {
+        ...updated,
+        groups: updated.hasGroups ? [...GROUPS_9_10] : [],
+      },
+    });
+  } catch (err: any) {
+    console.error("[classes] update class:", err);
+    res.status(500).json({ error: err?.message || "Failed to update class" });
+  }
+});
+
+// DELETE /api/admin/classes/:id
+router.delete("/admin/classes/:id", ...adminOnly, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existingClass = await prisma.schoolClass.findUnique({ where: { id } });
+    if (!existingClass) {
+      return res.status(404).json({ error: "Class not found" });
+    }
+
+    try {
+      await prisma.schoolClass.delete({ where: { id } });
+    } catch {
+      await prisma.schoolClass.update({
+        where: { id },
+        data: { isActive: false },
+      });
+    }
+
+    res.json({ success: true, message: "Class deleted successfully" });
+  } catch (err: any) {
+    console.error("[classes] delete class:", err);
+    res.status(500).json({ error: err?.message || "Failed to delete class" });
+  }
+});
+
+// ── Edit & Delete Section Endpoints ────────────────────────────────────────
+
+// PATCH /api/admin/classes/sections/:sectionId
+router.patch(
+  "/admin/classes/sections/:sectionId",
+  ...adminOnly,
+  async (req, res) => {
+    try {
+      const { sectionId } = req.params;
+      const name =
+        req.body.name != null ? String(req.body.name).trim() : undefined;
+      const capacity =
+        req.body.capacity != null
+          ? Math.min(30, Number(req.body.capacity))
+          : undefined;
+
+      const existing = await prisma.classSection.findUnique({
+        where: { id: sectionId },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Section not found" });
+      }
+
+      const updateData: any = {};
+      if (name !== undefined) updateData.name = name;
+      if (capacity !== undefined) updateData.capacity = capacity;
+
+      const updated = await prisma.classSection.update({
+        where: { id: sectionId },
+        data: updateData,
+      });
+
+      res.json({ section: updated });
+    } catch (err: any) {
+      console.error("[classes] update section:", err);
+      res
+        .status(500)
+        .json({ error: err?.message || "Failed to update section" });
+    }
+  },
+);
+
+// DELETE /api/admin/classes/sections/:sectionId
+router.delete(
+  "/admin/classes/sections/:sectionId",
+  ...adminOnly,
+  async (req, res) => {
+    try {
+      const { sectionId } = req.params;
+      const existing = await prisma.classSection.findUnique({
+        where: { id: sectionId },
+      });
+      if (!existing) {
+        return res.status(404).json({ error: "Section not found" });
+      }
+
+      try {
+        await prisma.classSection.delete({ where: { id: sectionId } });
+      } catch {
+        await prisma.classSection.update({
+          where: { id: sectionId },
+          data: { isActive: false },
+        });
+      }
+
+      res.json({ success: true, message: "Section deleted successfully" });
+    } catch (err: any) {
+      console.error("[classes] delete section:", err);
+      res
+        .status(500)
+        .json({ error: err?.message || "Failed to delete section" });
+    }
+  },
+);
 
 // ── Section detail (for the drawer) ────────────────────────────────────
 
