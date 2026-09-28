@@ -251,4 +251,72 @@ router.get(
 );
 
 
+
+// PATCH /api/teacher/subject-requests/:id — edit own request
+router.patch(
+  "/teacher/subject-requests/:id",
+  requireAuth,
+  requireRole("teacher"),
+  async (req, res) => {
+    try {
+      const existing = await prisma.classSubjectRequest.findUnique({
+        where: { id: req.params.id },
+      });
+
+      if (!existing || existing.teacherEmail !== req.user!.email) {
+        return res.status(404).json({ error: "Request not found" });
+      }
+
+      const { grade, section, subject, subjectCode, group, room, schedule, time, reason } = req.body;
+
+      const updated = await prisma.classSubjectRequest.update({
+        where: { id: req.params.id },
+        data: {
+          ...(grade && { grade }),
+          ...(section && { section }),
+          ...(subject && { subject }),
+          ...(subjectCode && { subjectCode }),
+          group: group !== undefined ? group : existing.group,
+          room: room !== undefined ? room : existing.room,
+          schedule: schedule !== undefined ? schedule : existing.schedule,
+          time: time !== undefined ? time : existing.time,
+          reason: reason !== undefined ? reason : existing.reason,
+        },
+      });
+
+      res.json({ request: updated });
+    } catch (err: any) {
+      console.error("[teacher] edit request:", err);
+      res.status(500).json({ error: err?.message || "Failed to update request" });
+    }
+  }
+);
+
+// DELETE /api/teacher/subject-requests/:id — delete own request
+router.delete(
+  "/teacher/subject-requests/:id",
+  requireAuth,
+  requireRole("teacher"),
+  async (req, res) => {
+    try {
+      const existing = await prisma.classSubjectRequest.findUnique({
+        where: { id: req.params.id },
+      });
+
+      if (!existing || existing.teacherEmail !== req.user!.email) {
+        return res.status(404).json({ error: "Request not found" });
+      }
+
+      await prisma.classSubjectRequest.delete({
+        where: { id: req.params.id },
+      });
+
+      res.json({ success: true, message: "Request deleted successfully" });
+    } catch (err: any) {
+      console.error("[teacher] delete request:", err);
+      res.status(500).json({ error: err?.message || "Failed to delete request" });
+    }
+  }
+);
+
 export default router;
