@@ -26,32 +26,46 @@ import { prisma } from "./lib/prisma.js";
 
 const app = express();
 
+
 // Required behind Cloud Reverse Proxies (Render, Railway, Fly.io, Vercel)
 app.set("trust proxy", 1);
 
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:5000",
-  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
+  ...(process.env.CLIENT_ORIGIN
+    ? process.env.CLIENT_ORIGIN.split(",").map((o) => o.trim())
+    : []),
 ].filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin) || /\.vercel\.app$/.test(new URL(origin).hostname)) {
-        callback(null, true);
-      } else {
-        callback(new Error("CORS policy violation"));
-      }
-    },
-    credentials: true,
-  })
+function isAllowedOrigin(origin: string) {
+  if (allowedOrigins.includes(origin)) return true;
+  try {
+    return /\.vercel\.app$/.test(new URL(origin).hostname);
+  } catch {
+    return false; // "null" ba invalid origin, crash na kore block
+  }
+}
+
+const corsMiddleware = cors({
+  origin: (origin, callback) => {
+    if (!origin || isAllowedOrigin(origin)) return callback(null, true);
+    return callback(null, false); // Error pass korle 500 hoy, false dile shudhu CORS header thake na
+  },
+  credentials: true,
+});
+
+// SSLCommerz callback gulo browser redirect / server IPN, CORS lagbe na
+const sslCallback = /^\/api\/student\/fees\/ssl\/(success|fail|cancel|ipn)$/;
+app.use((req, res, next) =>
+  sslCallback.test(req.path) ? next() : corsMiddleware(req, res, next),
 );
 
 // Better Auth reads the raw request body itself, so its routes must be
 // mounted BEFORE express.json() global middleware runs on them.
 app.use("/api/auth", authRoutes);
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", userRoutes);
 app.use("/api", noticeRoutes);
