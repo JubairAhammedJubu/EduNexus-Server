@@ -25,6 +25,10 @@ model User {
   bio           String?
   role          String  @default("student") // "admin" | "teacher" | "student"
 
+ feeAccessBlocked Boolean   @default(false)
+  feeBlockedAt     DateTime?
+  feeUnblockedAt   DateTime?
+  feeUnblockedBy   String?
   // ── Login lockout tracking (3 incorrect passwords lock account for 5 hours) ──
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
@@ -320,73 +324,6 @@ model Attendance {
   @@map("attendances")
 }
 
-enum FeeType {
-  MONTHLY
-  EXAM
-  REGISTRATION
-  OTHER
-}
-
-enum PaymentMethod {
-  CASH
-  BANK
-  MOBILE_BANKING
-}
-
-model FeeStructure {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
-  studentClass String // "Class 6" ... "Class 10"
-  feeType      FeeType
-  amount       Float
-  examId       String? // set only when feeType = EXAM — links to Exam.id
-  sessionYear  String // e.g. "2026"
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@unique([studentClass, feeType, examId, sessionYear])
-  @@index([studentClass, feeType])
-}
-
-enum PaymentStatus {
-  PENDING
-  APPROVED
-  REJECTED
-}
-
-model FeePayment {
-  id           String        @id @default(auto()) @map("_id") @db.ObjectId
-  studentId    String        @db.ObjectId
-  studentEmail String
-  studentName  String
-  studentClass String
-  feeType      FeeType
-  amount       Float
-  method       PaymentMethod
-  month        String?
-  examId       String?
-  sessionYear  String
-  receiptNo    String        @unique
-  note         String?
-
-  status               PaymentStatus @default(APPROVED) // NEW
-  submittedByStudent   Boolean       @default(false) // NEW
-  transactionRef       String? // NEW — bank/mobile banking ref
-  senderPhone          String? // Mobile number used to send payment (e.g. bKash/Nagad number)
-  gateway              String? // "bKash" | "Nagad" | "Rocket" | "Upay" | "Bank"
-  screenshotUrl        String? // NEW — R2 URL of proof
-  reviewedByAdminEmail String? // NEW
-  reviewedAt           DateTime? // NEW
-  rejectionReason      String? // NEW
-
-  recordedByAdminEmail String? // now optional — null when student-submitted
-  paidAt               DateTime @default(now())
-
-  @@index([studentId, feeType])
-  @@index([studentEmail])
-  @@index([feeType, month])
-  @@index([examId])
-  @@index([status])
-}
 
 // ── Academic structure (admin manages) ───────────────────────────
 
@@ -522,4 +459,138 @@ model RoutineSlot {
   @@unique([sectionId,group, day, periodId])
   @@index([sectionId,group])
   @@map("routine_slots")
+}
+
+// ── Fee enums ──────────────────────────────────────────────────────────
+
+enum FeeType {
+  MONTHLY
+  EXAM
+  CUSTOM
+  FINE
+}
+
+enum PaymentMethod {
+  CASH
+  BANK
+  MOBILE_BANKING
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum GatewayPaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+// ── Monthly rate per class (Class 6–10, admin can raise/lower) ─────────
+
+model FeeStructure {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  studentClass String
+  feeType      FeeType  @default(MONTHLY)
+  amount       Float
+  sessionYear  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([studentClass, feeType, sessionYear])
+  @@index([sessionYear])
+  @@map("fee_structures")
+}
+
+// ── Admin-created fees (exam / extra) — students see these ─────────────
+
+model FeeCatalog {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  title        String
+  description  String?
+  feeType      FeeType   // EXAM | CUSTOM
+  amount       Float
+  studentClass String    // "Class 10" | "ALL"
+  section      String?   // "Section A" | null = all sections
+  sessionYear  String
+  dueDate      DateTime?
+  examId       String?
+  isActive     Boolean   @default(true)
+  createdByEmail String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([studentClass, sessionYear])
+  @@index([feeType, isActive])
+  @@map("fee_catalog")
+}
+
+// ── School-wide fee rules ──────────────────────────────────────────────
+
+model FeeSettings {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  sessionYear     String   @unique
+  fineAmount      Float    @default(500)
+  lockAfterMonths Int      @default(3) // unpaid months > this → dashboard off
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("fee_settings")
+}
+
+// ── Actual payments (admin cash + student SSL) ─────────────────────────
+
+model FeePayment {
+  id           String @id @default(auto()) @map("_id") @db.ObjectId
+  studentId    String @db.ObjectId
+  studentEmail String
+  studentName  String
+  studentClass String
+
+  feeType     FeeType
+  amount      Float
+  method      PaymentMethod
+  month       String? // "2026-09" for MONTHLY
+  catalogId   String? @db.ObjectId
+  examId      String?
+  sessionYear String
+  receiptNo   String  @unique
+  note        String?
+
+  status             PaymentStatus @default(PENDING)
+  submittedByStudent Boolean       @default(false)
+  recordedByAdminEmail String?
+
+  transactionRef String?
+  senderPhone    String?
+  gateway        String? // "SSLCommerz" | "bKash" | null
+  screenshotUrl  String?
+
+  reviewedByAdminEmail String?
+  reviewedAt           DateTime?
+  rejectionReason      String?
+
+  paidAt DateTime @default(now())
+
+  // SSLCommerz
+  gatewayStatus GatewayPaymentStatus?
+  gatewayTranId String?               @unique
+  gatewayValId  String?
+  gatewayAmount Float?
+  gatewayPaidAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([studentId, feeType])
+  @@index([studentEmail])
+  @@index([feeType, month])
+  @@index([catalogId])
+  @@index([status])
+  @@index([gatewayStatus])
+  @@index([sessionYear, studentClass])
+  @@map("fee_payments")
 }
