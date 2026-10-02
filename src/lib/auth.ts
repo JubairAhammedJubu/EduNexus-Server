@@ -19,7 +19,13 @@ export function isDemoEmail(email: string): boolean {
   );
 }
 
+export const demoAccountsEnabled = process.env.ENABLE_DEMO_ACCOUNTS !== "false";
+
 export async function handleDemoUserSignIn(email: string) {
+  if (!demoAccountsEnabled) {
+    throw new Error("Demo accounts are disabled");
+  }
+
   const isTeacher = email.endsWith("@edunexus.tchr.com");
   const defaultPassword = isTeacher ? "demoteacher1234" : "demostudent1234";
   const passwordHash = await hashPassword(defaultPassword);
@@ -280,11 +286,22 @@ export const auth = betterAuth({
             const rawGroup = (user as any).group?.trim();
 
             if (rawClass && rawSection) {
-              const cleanGrade = rawClass.replace(/(Class|Grade)\s*/i, "").trim();
-              const classCriteria = [rawClass, `Class ${cleanGrade}`, `Grade ${cleanGrade}`, cleanGrade];
+              const cleanGrade = rawClass
+                .replace(/(Class|Grade)\s*/i, "")
+                .trim();
+              const classCriteria = [
+                rawClass,
+                `Class ${cleanGrade}`,
+                `Grade ${cleanGrade}`,
+                cleanGrade,
+              ];
 
               const cleanSection = rawSection.replace(/Section\s*/i, "").trim();
-              const sectionCriteria = [rawSection, `Section ${cleanSection}`, cleanSection];
+              const sectionCriteria = [
+                rawSection,
+                `Section ${cleanSection}`,
+                cleanSection,
+              ];
 
               const groupFilter = rawGroup ? { group: rawGroup } : {};
               const classWhere = {
@@ -298,7 +315,9 @@ export const auth = betterAuth({
               };
 
               // Section capacity check (Max 30 students per section)
-              const sectionCount = await prisma.user.count({ where: sectionWhere });
+              const sectionCount = await prisma.user.count({
+                where: sectionWhere,
+              });
               if (sectionCount >= 30) {
                 throw new APIError("BAD_REQUEST", {
                   message: `${rawSection} of ${rawClass}${rawGroup ? ` (${rawGroup})` : ""} has reached maximum capacity (30 students). Please select another section.`,
@@ -393,6 +412,12 @@ export const auth = betterAuth({
       if (!email) return;
 
       if (isDemoEmail(email)) {
+        if (!demoAccountsEnabled) {
+          throw new APIError("FORBIDDEN", {
+            message: "Demo accounts are unavailable.",
+            code: "DEMO_ACCOUNTS_DISABLED",
+          });
+        }
         await handleDemoUserSignIn(email);
         return; // Demo accounts bypass pending approval & lockout checks
       }

@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
+import { requireAuth, requireRole } from "../middleware/session.js";
 
 const router = Router();
+const staffOnly = [requireAuth, requireRole("teacher", "admin")] as const;
 
 /**
  * GET /api/exams
@@ -30,7 +32,7 @@ router.get("/exams", async (_req, res) => {
  * POST /api/exams
  * Creates a new examination entry in MongoDB `examinations` collection.
  */
-router.post("/exams", async (req, res) => {
+router.post("/exams", ...staffOnly, async (req, res) => {
   try {
     const {
       title,
@@ -79,10 +81,10 @@ router.post("/exams", async (req, res) => {
         isYourDuty: typeof isYourDuty === "boolean" ? isYourDuty : true,
         syllabus: syllabus || "",
         status: "Upcoming",
-        teacherEmail: teacherEmail || null,
+        teacherEmail:
+          req.user!.role === "admin" ? teacherEmail || null : req.user!.email,
       },
     });
-
 
     return res.status(201).json({
       success: true,
@@ -102,9 +104,15 @@ router.post("/exams", async (req, res) => {
  * PATCH /api/exams/:id/cancel
  * Cancels an examination by updating its status to "Cancelled".
  */
-router.patch("/exams/:id/cancel", async (req, res) => {
+router.patch("/exams/:id/cancel", ...staffOnly, async (req, res) => {
   try {
     const { id } = req.params;
+    const exam = await prisma.exam.findUnique({ where: { id } });
+    if (!exam) return res.status(404).json({ error: "Examination not found" });
+    if (req.user!.role !== "admin" && exam.teacherEmail !== req.user!.email) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
     const updated = await prisma.exam.update({
       where: { id },
       data: { status: "Cancelled" },

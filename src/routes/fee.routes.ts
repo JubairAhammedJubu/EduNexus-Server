@@ -25,12 +25,22 @@ function monthKey(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function fineAmountForMonths(unpaidMonthCount: number) {
+  if (unpaidMonthCount >= 3) return 5000;
+  if (unpaidMonthCount === 2) return 1500;
+  if (unpaidMonthCount === 1) return 500;
+  return 0;
+}
+
 function isObjectId(id: string) {
   return /^[a-f\d]{24}$/i.test(id);
 }
 
 function clientUrl() {
-  return  process.env.CLIENT_ORIGIN || "http://localhost:3000";
+  const origin = process.env.CLIENT_ORIGIN?.split(",")
+    .map((value) => value.trim())
+    .find(Boolean);
+  return (origin || "http://localhost:3000").replace(/\/$/, "");
 }
 
 function serverUrl() {
@@ -112,17 +122,23 @@ async function monthlySnapshot(
   );
   const unpaidMonths = months.filter((m) => !approvedMonths.has(m));
 
-  const finePaid = await prisma.feePayment.findFirst({
+  const finePayments = await prisma.feePayment.findMany({
     where: {
       studentId,
       feeType: "FINE",
       sessionYear,
       status: "APPROVED",
     },
+    select: { amount: true },
   });
 
   const fineApplicable = unpaidMonths.length >= 1;
-  const fineDue = fineApplicable && !finePaid ? settings.fineAmount : 0;
+  const fineAmount = fineAmountForMonths(unpaidMonths.length);
+  const finePaidAmount = finePayments.reduce(
+    (sum, payment) => sum + payment.amount,
+    0,
+  );
+  const fineDue = Math.max(fineAmount - finePaidAmount, 0);
   const blocked = unpaidMonths.length > settings.lockAfterMonths;
 
   return {
@@ -131,8 +147,9 @@ async function monthlySnapshot(
     months,
     unpaidMonths,
     fineApplicable,
+    fineAmount,
     fineDue,
-    finePaid: Boolean(finePaid),
+    finePaid: fineApplicable && fineDue === 0,
     blocked,
   };
 }
@@ -180,6 +197,59 @@ function cashPaymentIds() {
   return { receiptNo: no, gatewayTranId: `CASH-${no}` };
 }
 
+function feeClaimKey(
+  studentId: string,
+  feeType: FeeType,
+  sessionYear: string,
+  month?: string | null,
+  catalogId?: string | null,
+) {
+  if (feeType === "FINE") {
+    return `FINE:${studentId}:${sessionYear}`;
+  }
+  if (feeType === "MONTHLY" && month) {
+    return `MONTHLY:${studentId}:${sessionYear}:${month}`;
+  }
+  if (catalogId) return `CATALOG:${studentId}:${catalogId}`;
+  return null;
+}
+
+async function reserveFeeClaim(key: string) {
+  try {
+    await prisma.feePaymentClaim.deleteMany({
+      where: { key, expiresAt: { lte: new Date() } },
+    });
+    await prisma.feePaymentClaim.create({
+      data: { key, expiresAt: new Date(Date.now() + STALE_MS) },
+    });
+    return true;
+  } catch (error: any) {
+    if (error?.code === "P2002") return false;
+    throw error;
+  }
+}
+
+async function releaseFeeClaim(key: string | null) {
+  if (!key) return;
+  await prisma.feePaymentClaim.deleteMany({ where: { key } });
+}
+
+function paymentClaimKey(payment: {
+  studentId: string;
+  feeType: FeeType;
+  sessionYear: string;
+  month: string | null;
+  catalogId: string | null;
+}) {
+  return feeClaimKey(
+    payment.studentId,
+    payment.feeType,
+    payment.sessionYear,
+    payment.month,
+    payment.catalogId,
+  );
+}
+
 // ── SSLCommerz helpers ─────────────────────────────────────────────────
 
 /**
@@ -200,10 +270,15 @@ async function markSslPaid(tranId: string, valId?: string) {
   const v: any = await getSsl().validate({ val_id: valId });
   const ok = v?.status === "VALID" || v?.status === "VALIDATED";
   if (!ok) return false;
-  if (v?.tran_id && String(v.tran_id) !== tranId) return false;
+  if (!v?.tran_id || String(v.tran_id) !== tranId) return false;
 
   const expected = existing.gatewayAmount ?? existing.amount;
-  if (v?.amount && Math.abs(Number(v.amount) - Number(expected)) > 0.01) {
+  const validatedAmount = Number(v?.amount);
+  if (
+    !Number.isFinite(validatedAmount) ||
+    Math.abs(validatedAmount - Number(expected)) > 0.01 ||
+    String(v?.currency || "").toUpperCase() !== "BDT"
+  ) {
     console.error("[ssl] amount mismatch", tranId, v.amount, expected);
     return false;
   }
@@ -232,41 +307,31 @@ async function markSslPaid(tranId: string, valId?: string) {
     const fineAmount = Number(existing.note.slice(FINE_MARK.length));
     if (Number.isFinite(fineAmount) && fineAmount > 0) {
       try {
-        const alreadyFined = await prisma.feePayment.findFirst({
-          where: {
+        await prisma.feePayment.create({
+          data: {
             studentId: existing.studentId,
+            studentEmail: existing.studentEmail,
+            studentName: existing.studentName,
+            studentClass: existing.studentClass,
             feeType: "FINE",
+            amount: fineAmount,
+            method: "BANK",
+            month: existing.month,
             sessionYear: existing.sessionYear,
+            note: "Monthly due fine (paid with monthly fee)",
+            receiptNo: receiptNo(),
             status: "APPROVED",
+            submittedByStudent: true,
+            gateway: "SSLCommerz",
+            gatewayStatus: "PAID",
+            gatewayTranId: `${tranId}-FINE`,
+            gatewayValId: valId,
+            gatewayAmount: fineAmount,
+            gatewayPaidAt: now,
+            paidAt: now,
+            transactionRef: tranId,
           },
         });
-        if (!alreadyFined) {
-          await prisma.feePayment.create({
-            data: {
-              studentId: existing.studentId,
-              studentEmail: existing.studentEmail,
-              studentName: existing.studentName,
-              studentClass: existing.studentClass,
-              feeType: "FINE",
-              amount: fineAmount,
-              method: "BANK",
-              month: existing.month,
-              sessionYear: existing.sessionYear,
-              note: "Monthly due fine (paid with monthly fee)",
-              receiptNo: receiptNo(),
-              status: "APPROVED",
-              submittedByStudent: true,
-              gateway: "SSLCommerz",
-              gatewayStatus: "PAID",
-              gatewayTranId: `${tranId}-FINE`,
-              gatewayValId: valId,
-              gatewayAmount: fineAmount,
-              gatewayPaidAt: now,
-              paidAt: now,
-              transactionRef: tranId,
-            },
-          });
-        }
       } catch (e) {
         console.error("[ssl] fine row create failed:", e);
       }
@@ -278,6 +343,7 @@ async function markSslPaid(tranId: string, valId?: string) {
     existing.studentClass,
     existing.sessionYear,
   );
+  await releaseFeeClaim(paymentClaimKey(existing));
   return true;
 }
 
@@ -286,10 +352,15 @@ async function markSslClosed(
   gatewayStatus: "FAILED" | "CANCELLED",
 ) {
   if (!tranId) return;
-  await prisma.feePayment.updateMany({
+  const payment = await prisma.feePayment.findFirst({
+    where: { gatewayTranId: tranId, gatewayStatus: "PENDING" },
+  });
+  if (!payment) return;
+  const result = await prisma.feePayment.updateMany({
     where: { gatewayTranId: tranId, gatewayStatus: "PENDING" },
     data: { gatewayStatus, status: "REJECTED" },
   });
+  if (result.count > 0) await releaseFeeClaim(paymentClaimKey(payment));
 }
 
 /**
@@ -340,10 +411,11 @@ async function releaseStaleSslPending(
     }
 
     if (queried || force || age > STALE_MS) {
-      await prisma.feePayment.updateMany({
+      const result = await prisma.feePayment.updateMany({
         where: { id: p.id, gatewayStatus: "PENDING" },
         data: { gatewayStatus: "CANCELLED", status: "REJECTED" },
       });
+      if (result.count > 0) await releaseFeeClaim(paymentClaimKey(p));
     }
   }
 }
@@ -352,7 +424,9 @@ async function releaseStaleSslPending(
 
 router.get("/admin/students", ...adminOnly, async (req, res) => {
   try {
-    const q = String(req.query.search || "").trim().toLowerCase();
+    const q = String(req.query.search || "")
+      .trim()
+      .toLowerCase();
 
     const students = await prisma.user.findMany({
       where: { role: "student" },
@@ -554,7 +628,8 @@ router.patch("/admin/fees/catalog/:id", ...adminOnly, async (req, res) => {
     if (!isObjectId(id)) return res.status(400).json({ error: "Invalid id" });
 
     const data: Record<string, unknown> = {};
-    if (req.body.title !== undefined) data.title = String(req.body.title).trim();
+    if (req.body.title !== undefined)
+      data.title = String(req.body.title).trim();
     if (req.body.description !== undefined) {
       data.description = req.body.description
         ? String(req.body.description)
@@ -567,7 +642,8 @@ router.patch("/admin/fees/catalog/:id", ...adminOnly, async (req, res) => {
       }
       data.amount = amount;
     }
-    if (req.body.isActive !== undefined) data.isActive = Boolean(req.body.isActive);
+    if (req.body.isActive !== undefined)
+      data.isActive = Boolean(req.body.isActive);
     if (req.body.dueDate !== undefined) {
       data.dueDate = req.body.dueDate ? new Date(req.body.dueDate) : null;
     }
@@ -575,7 +651,8 @@ router.patch("/admin/fees/catalog/:id", ...adminOnly, async (req, res) => {
     const item = await prisma.feeCatalog.update({ where: { id }, data });
     return res.json({ success: true, catalog: item });
   } catch (err: any) {
-    if (err.code === "P2025") return res.status(404).json({ error: "Fee not found" });
+    if (err.code === "P2025")
+      return res.status(404).json({ error: "Fee not found" });
     console.error("[fees] catalog patch:", err);
     return res
       .status(500)
@@ -586,6 +663,7 @@ router.patch("/admin/fees/catalog/:id", ...adminOnly, async (req, res) => {
 // ── Admin cash ─────────────────────────────────────────────────────────
 
 router.post("/admin/fees/payments", ...adminOnly, async (req, res) => {
+  let pendingClaimKey: string | null = null;
   try {
     const studentId = String(req.body.studentId || "");
     const source = String(req.body.source || "").toUpperCase();
@@ -647,6 +725,14 @@ router.post("/admin/fees/payments", ...adminOnly, async (req, res) => {
         });
       }
 
+      pendingClaimKey = feeClaimKey(studentId, "MONTHLY", sessionYear, month);
+      if (!pendingClaimKey || !(await reserveFeeClaim(pendingClaimKey))) {
+        pendingClaimKey = null;
+        return res
+          .status(409)
+          .json({ error: "Monthly payment already exists for this month" });
+      }
+
       const monthlyIds = cashPaymentIds();
       created.push(
         await prisma.feePayment.create({
@@ -669,9 +755,14 @@ router.post("/admin/fees/payments", ...adminOnly, async (req, res) => {
           },
         }),
       );
+      pendingClaimKey = null;
 
       if (payFine) {
-        const snap = await monthlySnapshot(studentId, studentClass, sessionYear);
+        const snap = await monthlySnapshot(
+          studentId,
+          studentClass,
+          sessionYear,
+        );
         if (snap.fineDue > 0) {
           const fineIds = cashPaymentIds();
           created.push(
@@ -728,6 +819,20 @@ router.post("/admin/fees/payments", ...adminOnly, async (req, res) => {
         });
       }
 
+      pendingClaimKey = feeClaimKey(
+        studentId,
+        catalog.feeType,
+        sessionYear,
+        null,
+        catalogId,
+      );
+      if (!pendingClaimKey || !(await reserveFeeClaim(pendingClaimKey))) {
+        pendingClaimKey = null;
+        return res
+          .status(409)
+          .json({ error: "Payment already exists for this fee" });
+      }
+
       const amount =
         Number.isFinite(Number(req.body.amount)) && Number(req.body.amount) > 0
           ? Number(req.body.amount)
@@ -756,6 +861,7 @@ router.post("/admin/fees/payments", ...adminOnly, async (req, res) => {
           },
         }),
       );
+      pendingClaimKey = null;
     }
 
     const snap = await refreshFeeLock(
@@ -771,6 +877,7 @@ router.post("/admin/fees/payments", ...adminOnly, async (req, res) => {
       blocked: snap.blocked,
     });
   } catch (err: any) {
+    if (pendingClaimKey) await releaseFeeClaim(pendingClaimKey);
     console.error("[fees] admin cash:", err);
     return res
       .status(500)
@@ -783,7 +890,9 @@ router.get("/admin/fees/payments", ...adminOnly, async (req, res) => {
     const sessionYear = String(
       req.query.sessionYear || new Date().getFullYear(),
     );
-    const q = String(req.query.q || "").trim().toLowerCase();
+    const q = String(req.query.q || "")
+      .trim()
+      .toLowerCase();
     const method = String(req.query.method || "ALL");
     const studentClass = String(req.query.studentClass || "");
     const limit = Math.min(Number(req.query.limit) || 40, 100);
@@ -998,7 +1107,7 @@ router.get("/student/fees", ...studentOnly, async (req, res) => {
       unpaidMonths: snap.unpaidMonths,
       fine: {
         applicable: snap.fineApplicable,
-        amount: snap.settings.fineAmount,
+        amount: snap.fineAmount,
         paid: snap.finePaid,
         due: snap.fineDue,
       },
@@ -1029,6 +1138,8 @@ router.get("/student/fees", ...studentOnly, async (req, res) => {
 // ── SSLCommerz ─────────────────────────────────────────────────────────
 
 router.post("/student/fees/ssl/init", ...studentOnly, async (req, res) => {
+  let pendingClaimKey: string | null = null;
+  let paymentCreated = false;
   try {
     const student = req.user!;
     const sessionYear = String(
@@ -1088,17 +1199,49 @@ router.post("/student/fees/ssl/init", ...studentOnly, async (req, res) => {
       }
 
       baseAmount = snap.rate;
-      amount = snap.rate + snap.fineDue; // gateway theke total charge hobe
+      const includeFine = req.body.includeFine !== false;
+      amount = snap.rate + (includeFine ? snap.fineDue : 0);
       productName = `Monthly fee ${month}`;
-      // Fine alada FINE row hishebe payment success e toiri hobe
-      if (snap.fineDue > 0) payNote = `${FINE_MARK}${snap.fineDue}`;
+      if (includeFine && snap.fineDue > 0) {
+        payNote = `${FINE_MARK}${snap.fineDue}`;
+      }
+    } else if (feeType === "FINE") {
+      if (snap.fineDue <= 0) {
+        return res.status(400).json({ error: "No fine due" });
+      }
+
+      await releaseStaleSslPending(
+        { studentId: student.id, feeType: "FINE", sessionYear },
+        { force: true },
+      );
+
+      const pendingFine = await prisma.feePayment.findFirst({
+        where: {
+          studentId: student.id,
+          feeType: "FINE",
+          sessionYear,
+          status: "PENDING",
+        },
+      });
+      if (pendingFine) {
+        return res.status(409).json({ error: "Fine payment already pending" });
+      }
+
+      baseAmount = snap.fineDue;
+      amount = snap.fineDue;
+      productName = "Monthly fee fine";
+      payNote = "Monthly due fine";
     } else {
       catalogId = String(req.body.catalogId || "");
       if (!isObjectId(catalogId)) {
         return res.status(400).json({ error: "catalogId required" });
       }
-      const catalog = await prisma.feeCatalog.findUnique({
-        where: { id: catalogId },
+      const catalog = await prisma.feeCatalog.findFirst({
+        where: {
+          id: catalogId,
+          sessionYear,
+          ...catalogVisibleTo(studentClass, student.studentSection),
+        },
       });
       if (!catalog || !catalog.isActive) {
         return res.status(404).json({ error: "Fee not found" });
@@ -1121,6 +1264,18 @@ router.post("/student/fees/ssl/init", ...studentOnly, async (req, res) => {
       amount = catalog.amount;
       examId = catalog.examId;
       productName = catalog.title;
+    }
+
+    pendingClaimKey = feeClaimKey(
+      student.id,
+      feeType,
+      sessionYear,
+      month,
+      catalogId,
+    );
+    if (!pendingClaimKey || !(await reserveFeeClaim(pendingClaimKey))) {
+      pendingClaimKey = null;
+      return res.status(409).json({ error: "Already paid / pending" });
     }
 
     let gatewayTranId = uniqueTranId();
@@ -1154,6 +1309,7 @@ router.post("/student/fees/ssl/init", ...studentOnly, async (req, res) => {
         transactionRef: gatewayTranId,
       },
     });
+    paymentCreated = true;
 
     const apiResponse = await getSsl().init({
       total_amount: amount,
@@ -1180,6 +1336,8 @@ router.post("/student/fees/ssl/init", ...studentOnly, async (req, res) => {
         where: { id: payment.id },
         data: { gatewayStatus: "FAILED", status: "REJECTED" },
       });
+      await releaseFeeClaim(pendingClaimKey);
+      pendingClaimKey = null;
       return res.status(400).json({
         error: apiResponse?.failedreason || "Failed to start payment",
       });
@@ -1192,6 +1350,9 @@ router.post("/student/fees/ssl/init", ...studentOnly, async (req, res) => {
       paymentId: payment.id,
     });
   } catch (err: any) {
+    if (pendingClaimKey && !paymentCreated) {
+      await releaseFeeClaim(pendingClaimKey);
+    }
     console.error("[ssl] init:", err);
     return res.status(500).json({ error: err?.message || "Init failed" });
   }
