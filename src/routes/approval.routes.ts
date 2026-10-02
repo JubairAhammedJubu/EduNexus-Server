@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
-import { handleDemoUserSignIn } from "../lib/auth.js";
+import {
+  demoAccountsEnabled,
+  handleDemoUserSignIn,
+  isDemoEmail,
+} from "../lib/auth.js";
 
 const router = Router();
 
@@ -20,13 +24,12 @@ router.get("/approval-status", async (req, res) => {
       return res.status(400).json({ error: "Email is required." });
     }
 
-    if (
-      email === "demostudent@edunexus.std.com" ||
-      email === "demoteacher@edunexus.tchr.com"
-    ) {
+    if (isDemoEmail(email) && demoAccountsEnabled) {
       await handleDemoUserSignIn(email);
       return res.json({ isApproved: true });
     }
+
+    if (isDemoEmail(email)) return res.json({ isApproved: true });
 
     const user = await prisma.user.findUnique({
       where: { email },
@@ -38,7 +41,9 @@ router.get("/approval-status", async (req, res) => {
     console.error("Error checking approval status:", error);
     return res
       .status(500)
-      .json({ error: error?.message || "Something went wrong. Please try again." });
+      .json({
+        error: error?.message || "Something went wrong. Please try again.",
+      });
   }
 });
 
@@ -54,7 +59,13 @@ router.get(
     try {
       const pendingUsers = await prisma.user.findMany({
         where: { isApproved: false },
-        select: { id: true, name: true, email: true, role: true, createdAt: true },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          createdAt: true,
+        },
         orderBy: { createdAt: "asc" },
       });
       return res.json({ users: pendingUsers });
@@ -62,7 +73,9 @@ router.get(
       console.error("Error listing pending users:", error);
       return res
         .status(500)
-        .json({ error: error?.message || "Something went wrong. Please try again." });
+        .json({
+          error: error?.message || "Something went wrong. Please try again.",
+        });
     }
   },
 );
@@ -88,7 +101,11 @@ router.post(
         select: { id: true, name: true, email: true },
       });
 
-      return res.json({ success: true, message: `${user.name} approved.`, user });
+      return res.json({
+        success: true,
+        message: `${user.name} approved.`,
+        user,
+      });
     } catch (error: any) {
       console.error("Error approving user:", error);
       return res
