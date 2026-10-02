@@ -30,11 +30,11 @@ function isObjectId(id: string) {
 }
 
 function clientUrl() {
-  return process.env.CLIENT_URL || "http://localhost:3000";
+  return  process.env.CLIENT_ORIGIN || "http://localhost:3000";
 }
 
 function serverUrl() {
-  return process.env.SERVER_URL || "http://localhost:5000";
+  return process.env.BETTER_AUTH_URL || "http://localhost:5000";
 }
 
 function methodLabel(p: {
