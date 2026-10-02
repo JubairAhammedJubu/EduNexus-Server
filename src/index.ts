@@ -39,12 +39,7 @@ const allowedOrigins = [
 ].filter(Boolean);
 
 function isAllowedOrigin(origin: string) {
-  if (allowedOrigins.includes(origin)) return true;
-  try {
-    return /\.vercel\.app$/.test(new URL(origin).hostname);
-  } catch {
-    return false; // "null" ba invalid origin, crash na kore block
-  }
+  return allowedOrigins.includes(origin);
 }
 
 const corsMiddleware = cors({
@@ -60,6 +55,20 @@ const sslCallback = /^\/api\/student\/fees\/ssl\/(success|fail|cancel|ipn)$/;
 app.use((req, res, next) =>
   sslCallback.test(req.path) ? next() : corsMiddleware(req, res, next),
 );
+
+const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+app.use((req, res, next) => {
+  if (sslCallback.test(req.path) || !unsafeMethods.has(req.method)) {
+    return next();
+  }
+
+  const origin = req.get("origin");
+  if (origin && !isAllowedOrigin(origin)) {
+    return res.status(403).json({ error: "Untrusted request origin" });
+  }
+
+  return next();
+});
 
 // Better Auth reads the raw request body itself, so its routes must be
 // mounted BEFORE express.json() global middleware runs on them.

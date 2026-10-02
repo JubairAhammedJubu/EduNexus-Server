@@ -34,6 +34,7 @@ MongoDB
      `--replSet` enabled).
    - `BETTER_AUTH_SECRET` — generate with `openssl rand -base64 32`.
    - `CLIENT_ORIGIN` — the URL of the Next.js app (defaults to `http://localhost:3000`).
+  - `ENABLE_DEMO_ACCOUNTS` — defaults to enabled; set to `false` to disable demo sign-in and provisioning.
 
 - `R2_ACCOUNT_ID` — your Cloudflare account ID, used to build the R2 endpoint.
 - `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` — an R2 API token with object write access.
