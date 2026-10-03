@@ -1,39 +1,545 @@
 import { Router } from "express";
+import multer from "multer";
+import { requireAuth, requireRole } from "../middleware/session.js";
 import { prisma } from "../lib/prisma.js";
+import { getMaxPdfSizeBytes, uploadPdfToR2 } from "../lib/r2.js";
+import { generateFeedbackDraft } from "../lib/ai-insight.js";
 
 const router = Router();
+const teacherOnly = [requireAuth, requireRole("teacher", "admin")];
+const uploadPdf = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: getMaxPdfSizeBytes() },
+});
+
+function handlePdfUpload(req: any, res: any, next: any) {
+  uploadPdf.single("file")(req, res, (error: any) => {
+    if (error) {
+      return res.status(400).json({
+        success: false,
+        error:
+          error.code === "LIMIT_FILE_SIZE"
+            ? "PDF must be 10 MB or smaller."
+            : "A PDF file is required.",
+      });
+    }
+
+    next();
+  });
+}
 
 /**
- * GET /api/teacher/assignments
+ * GET /api/student/assignments
+ *
+ * Returns active assignments for the authenticated student's class and
+ * section. Class and section are read from the student's profile, not from
+ * query parameters.
+ */
+/**
+ * GET /api/student/assignments
+ *
+ * Returns active assignments for the authenticated student's class and section,
+ * including the student's own submission (fileUrl, status, attempts, etc.).
+ */
+router.get(
+  "/student/assignments",
+  requireAuth,
+  requireRole("student"),
+  async (req, res) => {
+    try {
+      const student = await prisma.user.findUnique({
+        where: { id: req.user!.id },
+        select: {
+          studentClass: true,
+          studentSection: true,
+        },
+      });
+
+      if (!student?.studentClass || !student.studentSection) {
+        return res.status(400).json({
+          success: false,
+          error: "Student class and section are required to fetch assignments.",
+        });
+      }
+
+      const assignments = await prisma.assignment.findMany({
+        where: {
+          grade: student.studentClass,
+          section: student.studentSection,
+          status: "ACTIVE",
+        },
+        include: {
+          submissions: {
+            where: { studentId: req.user!.id }, // only this student's submission
+            select: {
+              fileUrl: true,
+              content: true,
+              status: true,
+              attemptsUsed: true,
+              marks: true,
+              feedback: true,
+              submittedAt: true,
+            },
+            take: 1, // a student can have only one submission per assignment
+          },
+        },
+        orderBy: {
+          dueDate: "asc",
+        },
+      });
+
+      // Shape the response for the frontend
+      const enrichedAssignments = assignments.map((assignment) => {
+        const submission = assignment.submissions[0] || null;
+
+        // remove the nested array so the frontend gets a flat object
+        const { submissions, ...rest } = assignment;
+
+        return {
+          ...rest,
+          submitStatus: submission
+            ? submission.status === "GRADED"
+              ? "GRADED"
+              : "SUBMITTED"
+            : "PENDING",
+          fileUrl: submission?.fileUrl || null,
+          attemptsUsed: submission?.attemptsUsed || 0,
+          marks: submission?.marks ?? null,
+          feedback: submission?.feedback ?? null,
+          submittedAt: submission?.submittedAt ?? null,
+        };
+      });
+
+      return res.json({
+        success: true,
+        count: enrichedAssignments.length,
+        assignments: enrichedAssignments,
+      });
+    } catch (error: any) {
+      console.error("Error fetching student assignments:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to fetch student assignments",
+      });
+    }
+  },
+);
+
+/**
+ * POST /api/student/assignments/:id/upload
+ *
+ * Uploads one PDF to Cloudflare R2 and returns its public URL.
+ * Multipart field: file
+ */
+router.post(
+  "/student/assignments/:id/upload",
+  requireAuth,
+  requireRole("student"),
+  handlePdfUpload,
+  async (req, res) => {
+    try {
+      const file = req.file;
+
+      if (!file) {
+        return res.status(400).json({
+          success: false,
+          error: "A PDF file is required in the 'file' field.",
+        });
+      }
+
+      if (
+        file.mimetype !== "application/pdf" ||
+        !file.buffer.subarray(0, 5).equals(Buffer.from("%PDF-"))
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: "Only valid PDF files are allowed.",
+        });
+      }
+
+      const { id: assignmentId } = req.params;
+
+      // Validate assignment id
+      if (!assignmentId || !/^[a-f\d]{24}$/i.test(assignmentId)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid assignment ID.",
+        });
+      }
+
+      const assignment = await prisma.assignment.findUnique({
+        where: { id: assignmentId },
+        select: {
+          id: true,
+          grade: true,
+          section: true,
+          status: true,
+          dueDate: true,
+        },
+      });
+
+      if (!assignment) {
+        return res.status(404).json({
+          success: false,
+          error: "Assignment not found.",
+        });
+      }
+
+      const student = await prisma.user.findUnique({
+        where: { id: req.user!.id },
+        select: { studentClass: true, studentSection: true },
+      });
+
+      if (
+        !student?.studentClass ||
+        !student.studentSection ||
+        assignment.grade !== student.studentClass ||
+        assignment.section !== student.studentSection
+      ) {
+        return res.status(403).json({
+          success: false,
+          error: "This assignment is not assigned to your section.",
+        });
+      }
+
+      if (assignment.status === "CLOSED") {
+        return res.status(400).json({
+          success: false,
+          error: "This assignment is closed and no longer accepts submissions.",
+        });
+      }
+
+      const existingSubmission = await prisma.submission.findUnique({
+        where: {
+          assignmentId_studentId: {
+            assignmentId,
+            studentId: req.user!.id,
+          },
+        },
+        select: { attemptsUsed: true, fileUrl: true },
+      });
+
+      const uploadAttemptsUsed = existingSubmission?.attemptsUsed ?? 0;
+
+      if (uploadAttemptsUsed >= 2) {
+        return res.status(409).json({
+          success: false,
+          error:
+            "You have already used both submission attempts for this assignment.",
+          attemptsUsed: 2,
+          attemptsRemaining: 0,
+        });
+      }
+
+      const fileUrl = await uploadPdfToR2(file, req.user!.id, assignmentId);
+
+      // ✅ Ensure returned URL is from your R2 public base
+      const r2PublicUrl = process.env.R2_PUBLIC_URL || "";
+      if (
+        !fileUrl ||
+        typeof fileUrl !== "string" ||
+        !r2PublicUrl ||
+        !fileUrl.startsWith(r2PublicUrl)
+      ) {
+        return res.status(500).json({
+          success: false,
+          error: "Failed to generate a valid file URL.",
+        });
+      }
+
+  
+
+      const nextAttemptsUsed = uploadAttemptsUsed + 1;
+
+      const submission = await prisma.submission.upsert({
+        where: {
+          assignmentId_studentId: {
+            assignmentId,
+            studentId: req.user!.id,
+          },
+        },
+        create: {
+          assignmentId,
+          studentId: req.user!.id,
+          studentEmail: req.user!.email,
+          fileUrl,
+          attemptsUsed: nextAttemptsUsed,
+          status: new Date() > assignment.dueDate ? "LATE" : "SUBMITTED",
+        },
+        update: {
+          fileUrl,
+          attemptsUsed: nextAttemptsUsed,
+          submittedAt: new Date(),
+          status: new Date() > assignment.dueDate ? "LATE" : "SUBMITTED",
+        },
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: "PDF uploaded successfully.",
+        fileUrl,
+        attemptsUsed: nextAttemptsUsed,
+        attemptsRemaining: 2 - nextAttemptsUsed,
+        submission,
+      });
+    } catch (error: any) {
+      console.error("Error uploading assignment PDF:", error);
+
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to upload PDF",
+      });
+    }
+  },
+);
+
+/**
+ * POST /api/student/assignments/:id/submit
+ *
+ * Creates or updates the authenticated student's submission for an assignment.
+ * Body: { content?: string, fileUrl?: string }
+ */
+router.post(
+  "/student/assignments/:id/submit",
+  requireAuth,
+  requireRole("student"),
+  async (req, res) => {
+    try {
+      const { id: assignmentId } = req.params;
+      const { content, fileUrl } = req.body;
+
+      // Basic type cleaning
+      const submissionContent =
+        typeof content === "string" ? content.trim() : "";
+      const clientFileUrl = typeof fileUrl === "string" ? fileUrl.trim() : "";
+
+      // Validate assignment id
+      if (!assignmentId || !/^[a-f\d]{24}$/i.test(assignmentId)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid assignment ID.",
+        });
+      }
+
+      // Validate content length
+      if (submissionContent.length > 5000) {
+        return res.status(400).json({
+          success: false,
+          error: "Content must be 5000 characters or less.",
+        });
+      }
+
+      // Safe URL check (only http/https + your R2 prefix)
+      const isAllowedFileUrl = (url: string) => {
+        try {
+          const parsed = new URL(url);
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            return false;
+          }
+          const r2 = process.env.R2_PUBLIC_URL || "";
+          if (!r2) return false;
+          return url.startsWith(r2);
+        } catch {
+          return false;
+        }
+      };
+
+      if (clientFileUrl && !isAllowedFileUrl(clientFileUrl)) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid file URL.",
+        });
+      }
+
+      const assignment = await prisma.assignment.findUnique({
+        where: { id: assignmentId },
+        select: { id: true, status: true, dueDate: true },
+      });
+
+      if (!assignment) {
+        return res.status(404).json({
+          success: false,
+          error: "Assignment not found.",
+        });
+      }
+
+      if (assignment.status === "CLOSED") {
+        return res.status(400).json({
+          success: false,
+          error: "This assignment is closed and no longer accepts submissions.",
+        });
+      }
+
+      const existingSubmission = await prisma.submission.findUnique({
+        where: {
+          assignmentId_studentId: {
+            assignmentId,
+            studentId: req.user!.id,
+          },
+        },
+        select: { attemptsUsed: true, fileUrl: true },
+      });
+
+      // Prefer DB fileUrl from /upload; client url only if allowed
+      const safeFileUrl = clientFileUrl || existingSubmission?.fileUrl || null;
+
+      if (!submissionContent && !safeFileUrl) {
+        return res.status(400).json({
+          success: false,
+          error: "Submission content or uploaded PDF is required.",
+        });
+      }
+
+      const isLate = new Date() > assignment.dueDate;
+      const sameUploadedFile =
+        Boolean(safeFileUrl) && safeFileUrl === existingSubmission?.fileUrl;
+
+      const attemptsUsed = existingSubmission
+        ? (existingSubmission.attemptsUsed ?? 0)
+        : 0;
+
+      if (attemptsUsed >= 2 && !sameUploadedFile) {
+        return res.status(409).json({
+          success: false,
+          error:
+            "You have already used both submission attempts for this assignment.",
+          attemptsUsed: 2,
+          attemptsRemaining: 0,
+        });
+      }
+
+      const nextAttemptsUsed = sameUploadedFile
+        ? attemptsUsed
+        : attemptsUsed + 1;
+
+      const submission = await prisma.submission.upsert({
+        where: {
+          assignmentId_studentId: {
+            assignmentId,
+            studentId: req.user!.id,
+          },
+        },
+        create: {
+          assignmentId,
+          studentId: req.user!.id,
+          studentEmail: req.user!.email,
+          content: submissionContent || null,
+          fileUrl: safeFileUrl,
+          attemptsUsed: nextAttemptsUsed,
+          status: isLate ? "LATE" : "SUBMITTED",
+        },
+        update: {
+          content: submissionContent || null,
+          fileUrl: safeFileUrl,
+          attemptsUsed: nextAttemptsUsed,
+          submittedAt: new Date(),
+          status: isLate ? "LATE" : "SUBMITTED",
+        },
+      });
+
+      await prisma.assignment.update({
+        where: { id: assignmentId },
+        data: { submitStatus: "SUBMITTED" },
+      });
+
+      return res.status(201).json({
+        success: true,
+        message:
+          nextAttemptsUsed === 1
+            ? "Assignment submitted successfully. You have one correction attempt remaining."
+            : "Assignment correction submitted successfully. No attempts remain.",
+        attemptsUsed: nextAttemptsUsed,
+        attemptsRemaining: 2 - nextAttemptsUsed,
+        submission,
+      });
+    } catch (error: any) {
+      console.error("Error submitting assignment:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to submit assignment",
+      });
+    }
+  },
+);
+
+/**
+ * GET /api/teacher/assignment
  *
  * Optional query:
  * ?teacherEmail=teacher@example.com
  * ?status=ACTIVE
  */
-router.get("/teacher/assignments", async (req, res) => {
+router.get("/teacher/assignments", ...teacherOnly, async (req, res) => {
   try {
-    const { teacherEmail, status } = req.query;
+    const { status } = req.query;
 
-    const whereClause: any = {};
-
-    if (teacherEmail && typeof teacherEmail === "string") {
-      whereClause.teacherEmail = teacherEmail;
-    }
+    const whereClause: any=
+      (req.user as { role?: string }).role === "admin"
+        ? {}
+        : { teacherEmail: req.user!.email };
 
     if (status && typeof status === "string") {
       whereClause.status = status;
     }
 
+    // 1. Fetch assignments without the student relation
     const assignments = await prisma.assignment.findMany({
       where: whereClause,
+      include: {
+        submissions: {
+          orderBy: {
+            submittedAt: "desc",
+          },
+        },
+      },
       orderBy: {
         dueDate: "asc",
       },
     });
 
+    // 2. Collect all student IDs from submissions
+    const studentIds = [
+      ...new Set(
+        assignments.flatMap((assignment) =>
+          assignment.submissions.map((submission) => submission.studentId)
+        )
+      ),
+    ];
+
+    // 3. Fetch existing students
+    const students = await prisma.user.findMany({
+      where: {
+        id: {
+          in: studentIds,
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        image: true,
+        studentClass: true,
+        studentSection: true,
+      },
+    });
+
+    // 4. Create quick lookup map
+    const studentMap = new Map(
+      students.map((student) => [student.id, student])
+    );
+
+    // 5. Attach student data safely
+    const assignmentsWithStudents = assignments.map((assignment) => ({
+      ...assignment,
+      submissions: assignment.submissions.map((submission) => ({
+        ...submission,
+        student: studentMap.get(submission.studentId) ?? null,
+      })),
+    }));
+
     return res.json({
       success: true,
-      assignments,
+      assignments: assignmentsWithStudents,
     });
   } catch (error: any) {
     console.error("Error fetching assignments:", error);
@@ -45,11 +551,86 @@ router.get("/teacher/assignments", async (req, res) => {
   }
 });
 /**
+ * GET /api/teacher/assignments/:id/submissions
+ *
+ * Returns all submissions for a specific assignment. Only the assignment creator (or admin) can view them.
+ */
+router.get(
+  "/teacher/assignments/:id/submissions",
+  ...teacherOnly,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const assignment = await prisma.assignment.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          title: true,
+          subject: true,
+          grade: true,
+          section: true,
+          teacherEmail: true,
+          totalMarks: true,
+        },
+      });
+
+      if (!assignment) {
+        return res.status(404).json({
+          success: false,
+          error: "Assignment not found.",
+        });
+      }
+
+      const isAdmin = (req.user as { role?: string }).role === "admin";
+      if (!isAdmin && assignment.teacherEmail !== req.user!.email) {
+        return res.status(403).json({
+          success: false,
+          error:
+            "You are not authorized to view submissions for this assignment.",
+        });
+      }
+
+      const submissions = await prisma.submission.findMany({
+        where: { assignmentId: id },
+        include: {
+          student: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              image: true,
+              studentClass: true,
+              studentSection: true,
+            },
+          },
+        },
+        orderBy: {
+          submittedAt: "desc",
+        },
+      });
+
+      return res.json({
+        success: true,
+        assignment,
+        submissions,
+      });
+    } catch (error: any) {
+      console.error("Error fetching assignment submissions:", error);
+
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to fetch submissions",
+      });
+    }
+  },
+);
+/**
  * POST /api/teacher/assignments
  *
  * Creates a new assignment.
  */
-router.post("/teacher/assignments", async (req, res) => {
+router.post("/teacher/assignments", ...teacherOnly, async (req, res) => {
   try {
     const {
       title,
@@ -59,25 +640,15 @@ router.post("/teacher/assignments", async (req, res) => {
       section,
       dueDate,
       totalMarks,
-      teacherEmail,
       teacherName,
       status,
     } = req.body;
 
     // Required fields
-    if (
-      !title ||
-      !description ||
-      !subject ||
-      !grade ||
-      !section ||
-      !dueDate ||
-      !teacherEmail
-    ) {
+    if (!title || !subject || !grade || !section || !dueDate) {
       return res.status(400).json({
         success: false,
-        error:
-          "Title, description, subject, grade, section, due date, and teacher email are required.",
+        error: "Title, subject, grade, section, and due date are required.",
       });
     }
 
@@ -90,9 +661,10 @@ router.post("/teacher/assignments", async (req, res) => {
         section: section.trim(),
         dueDate: new Date(dueDate),
         totalMarks: Number(totalMarks) || 100,
-        teacherEmail: teacherEmail.trim(),
-        teacherName: teacherName?.trim() || null,
+        teacherEmail: req.user!.email,
+        teacherName: req.user!.name || teacherName?.trim() || null,
         status: status || "ACTIVE",
+        submitStatus: "PENDING",
       },
     });
 
@@ -115,7 +687,7 @@ router.post("/teacher/assignments", async (req, res) => {
  *
  * Updates an existing assignment.
  */
-router.patch("/teacher/assignments/:id", async (req, res) => {
+router.patch("/teacher/assignments/:id", ...teacherOnly, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -127,24 +699,14 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
       section,
       dueDate,
       totalMarks,
-      teacherEmail,
       teacherName,
       status,
     } = req.body;
 
-    if (
-      !title ||
-      !description ||
-      !subject ||
-      !grade ||
-      !section ||
-      !dueDate ||
-      !teacherEmail
-    ) {
+    if (!title || !subject || !grade || !section || !dueDate) {
       return res.status(400).json({
         success: false,
-        error:
-          "Title, description, subject, grade, section, due date, and teacher email are required.",
+        error: "Title, subject, grade, section, and due date are required.",
       });
     }
 
@@ -159,8 +721,8 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
       });
     }
 
-    // Prevent a teacher from editing another teacher's assignment.
-    if (existingAssignment.teacherEmail !== teacherEmail.trim()) {
+    const isAdmin = (req.user as { role?: string }).role === "admin";
+    if (!isAdmin && existingAssignment.teacherEmail !== req.user!.email) {
       return res.status(403).json({
         success: false,
         error: "You are not authorized to edit this assignment.",
@@ -177,7 +739,9 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
         section: section.trim(),
         dueDate: new Date(dueDate),
         totalMarks: Number(totalMarks) || 100,
-        teacherName: teacherName?.trim() || null,
+        teacherName: isAdmin
+          ? teacherName?.trim() || null
+          : req.user!.name || teacherName?.trim() || null,
         status: status || "ACTIVE",
       },
     });
@@ -201,10 +765,9 @@ router.patch("/teacher/assignments/:id", async (req, res) => {
  *
  * Deletes an assignment.
  */
-router.delete("/teacher/assignments/:id", async (req, res) => {
+router.delete("/teacher/assignments/:id", ...teacherOnly, async (req, res) => {
   try {
     const { id } = req.params;
-    const { teacherEmail } = req.query;
 
     const existingAssignment = await prisma.assignment.findUnique({
       where: { id },
@@ -217,12 +780,8 @@ router.delete("/teacher/assignments/:id", async (req, res) => {
       });
     }
 
-    // If teacherEmail is provided, verify ownership.
-    if (
-      teacherEmail &&
-      typeof teacherEmail === "string" &&
-      existingAssignment.teacherEmail !== teacherEmail
-    ) {
+    const isAdmin = (req.user as { role?: string }).role === "admin";
+    if (!isAdmin && existingAssignment.teacherEmail !== req.user!.email) {
       return res.status(403).json({
         success: false,
         error: "You are not authorized to delete this assignment.",
@@ -246,4 +805,179 @@ router.delete("/teacher/assignments/:id", async (req, res) => {
     });
   }
 });
+
+function parseTeacherMarks(value: unknown, totalMarks: number): number | null {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(numeric) || numeric < 0 || numeric > totalMarks) {
+    return null;
+  }
+  return numeric;
+}
+
+async function loadGradableSubmission(
+  req: { user?: { email?: string | null } },
+  assignmentId: string,
+  submissionId: string
+) {
+  if (!/^[a-f\d]{24}$/i.test(assignmentId) || !/^[a-f\d]{24}$/i.test(submissionId)) {
+    return { ok: false as const, errorStatus: 400, error: "Invalid assignment or submission id." };
+  }
+
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      subject: true,
+      totalMarks: true,
+      teacherEmail: true,
+    },
+  });
+
+  if (!assignment) {
+    return { ok: false as const, errorStatus: 404, error: "Assignment not found." };
+  }
+
+  const isAdmin = (req.user as { role?: string } | undefined)?.role === "admin";
+  if (!isAdmin && assignment.teacherEmail !== req.user?.email) {
+    return {
+      ok: false as const,
+      errorStatus: 403,
+      error: "You are not authorized to grade this assignment.",
+    };
+  }
+
+  const submission = await prisma.submission.findFirst({
+    where: { id: submissionId, assignmentId },
+    include: { student: { select: { name: true } } },
+  });
+
+  if (!submission) {
+    return { ok: false as const, errorStatus: 404, error: "Submission not found." };
+  }
+
+  return { ok: true as const, assignment, submission };
+}
+
+/**
+ * POST /api/teacher/assignments/:assignmentId/submissions/:submissionId/feedback-draft
+ *
+ * Drafts a comment from the assignment context and the score the teacher
+ * typed. Nothing is saved. The teacher edits the draft, then saves it
+ * with the grade endpoint.
+ */
+router.post(
+  "/teacher/assignments/:assignmentId/submissions/:submissionId/feedback-draft",
+  ...teacherOnly,
+  async (req, res) => {
+    try {
+      const loaded = await loadGradableSubmission(
+        req,
+        req.params.assignmentId,
+        req.params.submissionId
+      );
+      if (!loaded.ok) {
+        return res.status(loaded.errorStatus).json({ success: false, error: loaded.error });
+      }
+
+      const marks = parseTeacherMarks(req.body?.marks, loaded.assignment.totalMarks);
+      if (marks === null) {
+        return res.status(400).json({
+          success: false,
+          error: `Enter a whole-number score from 0 to ${loaded.assignment.totalMarks} before drafting feedback.`,
+        });
+      }
+
+      const draft = await generateFeedbackDraft({
+        studentName: loaded.submission.student?.name || "the student",
+        assignmentTitle: loaded.assignment.title,
+        subject: loaded.assignment.subject,
+        assignmentDescription: loaded.assignment.description,
+        marks,
+        totalMarks: loaded.assignment.totalMarks,
+      });
+
+      return res.json({
+        success: true,
+        draft: draft.text,
+        source: draft.source,
+        marks,
+        totalMarks: loaded.assignment.totalMarks,
+      });
+    } catch (error: any) {
+      console.error("Error drafting assignment feedback:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to draft feedback.",
+      });
+    }
+  }
+);
+
+/**
+ * PATCH /api/teacher/assignments/:assignmentId/submissions/:submissionId/grade
+ *
+ * Saves the score and comment the teacher confirmed. The score always
+ * comes from this request, never from the draft endpoint.
+ */
+router.patch(
+  "/teacher/assignments/:assignmentId/submissions/:submissionId/grade",
+  ...teacherOnly,
+  async (req, res) => {
+    try {
+      const loaded = await loadGradableSubmission(
+        req,
+        req.params.assignmentId,
+        req.params.submissionId
+      );
+      if (!loaded.ok) {
+        return res.status(loaded.errorStatus).json({ success: false, error: loaded.error });
+      }
+
+      const marks = parseTeacherMarks(req.body?.marks, loaded.assignment.totalMarks);
+      const feedback = typeof req.body?.feedback === "string" ? req.body.feedback.trim() : "";
+
+      if (marks === null) {
+        return res.status(400).json({
+          success: false,
+          error: `Score must be a whole number from 0 to ${loaded.assignment.totalMarks}.`,
+        });
+      }
+      if (!feedback || feedback.length > 1000) {
+        return res.status(400).json({
+          success: false,
+          error: "Add a feedback comment (1000 characters or fewer) before saving. Review any draft first.",
+        });
+      }
+
+      const submission = await prisma.submission.update({
+        where: { id: loaded.submission.id },
+        data: {
+          marks,
+          feedback,
+          status: "GRADED",
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: "Grade saved. The student can now see this score and comment.",
+        submission: {
+          id: submission.id,
+          marks: submission.marks,
+          feedback: submission.feedback,
+          status: submission.status,
+        },
+      });
+    } catch (error: any) {
+      console.error("Error saving assignment grade:", error);
+      return res.status(500).json({
+        success: false,
+        error: error?.message || "Failed to save grade.",
+      });
+    }
+  }
+);
+
 export default router;

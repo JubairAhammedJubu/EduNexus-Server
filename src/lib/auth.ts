@@ -1,15 +1,101 @@
-import {betterAuth} from "better-auth";
-import {bearer} from "better-auth/plugins";
-import {prismaAdapter} from "better-auth/adapters/prisma";
-import {APIError, createAuthMiddleware} from "better-auth/api";
-import {prisma} from "./prisma.js";
+import { betterAuth } from "better-auth";
+import { admin, twoFactor } from "better-auth/plugins";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+import { APIError, createAuthMiddleware } from "better-auth/api";
+import { hashPassword } from "better-auth/crypto";
+import { prisma } from "./prisma.js";
 
 // ── Login lockout policy ───────────────────────────────────────────
-// Kew 3 bar bhul password dile, tar account 5 ghontar jonno login
-// kora theke lock hoye jabe.
+// If a user enters an incorrect password 3 times, their account will be
+// locked for 5 hours.
 const MAX_FAILED_LOGIN_ATTEMPTS = 3;
-const LOCKOUT_DURATION_MS = 2 * 60 * 60 * 1000; // 2 hours
+const LOCKOUT_DURATION_MS = 5 * 60 * 60 * 1000; // 5 hours
 
+export function isDemoEmail(email: string): boolean {
+  const normalized = email.toLowerCase().trim();
+  return (
+    normalized === "demostudent@edunexus.std.com" ||
+    normalized === "demoteacher@edunexus.tchr.com"
+  );
+}
+
+export const demoAccountsEnabled = process.env.ENABLE_DEMO_ACCOUNTS !== "false";
+
+export async function handleDemoUserSignIn(email: string) {
+  if (!demoAccountsEnabled) {
+    throw new Error("Demo accounts are disabled");
+  }
+
+  const isTeacher = email.endsWith("@edunexus.tchr.com");
+  const defaultPassword = isTeacher ? "demoteacher1234" : "demostudent1234";
+  const passwordHash = await hashPassword(defaultPassword);
+
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: {
+      id: true,
+      isApproved: true,
+      twoFactorEnabled: true,
+      lockedUntil: true,
+    },
+  });
+
+  if (!user) {
+    const created = await prisma.user.create({
+      data: {
+        name: isTeacher ? "Demo Teacher" : "Demo Student",
+        email,
+        role: isTeacher ? "teacher" : "student",
+        isApproved: true,
+        twoFactorEnabled: false,
+        emailVerified: true,
+      },
+    });
+
+    await prisma.account.create({
+      data: {
+        userId: created.id,
+        accountId: created.id,
+        providerId: "credential",
+        password: passwordHash,
+      },
+    });
+  } else {
+    await prisma.user.update({
+      where: { email },
+      data: {
+        isApproved: true,
+        twoFactorEnabled: false,
+        lockedUntil: null,
+        failedLoginAttempts: 0,
+      },
+    });
+
+    const existingAccount = await prisma.account.findFirst({
+      where: { userId: user.id, providerId: "credential" },
+    });
+
+    if (existingAccount) {
+      await prisma.account.update({
+        where: { id: existingAccount.id },
+        data: { password: passwordHash },
+      });
+    } else {
+      await prisma.account.create({
+        data: {
+          userId: user.id,
+          accountId: user.id,
+          providerId: "credential",
+          password: passwordHash,
+        },
+      });
+    }
+
+    await prisma.twoFactor.deleteMany({
+      where: { userId: user.id },
+    });
+  }
+}
 
 function formatRemainingLockTime(lockedUntil: Date): string {
   const msLeft = lockedUntil.getTime() - Date.now();
@@ -24,7 +110,9 @@ function formatRemainingLockTime(lockedUntil: Date): string {
 const clientOrigins = [
   "http://localhost:3000",
   "http://localhost:5000",
-  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
+  ...(process.env.CLIENT_ORIGIN
+    ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim())
+    : []),
 ].filter(Boolean);
 
 const isProduction =
@@ -37,14 +125,24 @@ export const auth = betterAuth({
   basePath: "/api/auth",
   trustedOrigins: clientOrigins,
 
-  plugins: [bearer()],
+  plugins: [
+    // Authenticator-app (TOTP) 2FA. First successful email+password login
+    // (before `user.twoFactorEnabled`) lets the client call
+    // `twoFactor.enable` to get a QR code; every login after that goes
+    // through the `twoFactorRedirect` + `verify-totp` flow automatically.
+    twoFactor({
+      issuer: "EduNexus",
+    }),
+
+    admin(),
+  ],
 
   database: prismaAdapter(prisma, {
     provider: "mongodb",
   }),
 
   advanced: {
-    database: {generateId: false},
+    database: { generateId: false },
     useSecureCookies: isProduction,
     defaultCookieAttributes: {
       sameSite: isProduction ? "none" : "lax",
@@ -55,7 +153,10 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 8,
-    autoSignIn: true,
+    // After registration, the account remains in pending-approval state, so
+    // we do not automatically sign in — the user is redirected to the login form
+    // and must log in normally after admin approval.
+    autoSignIn: false,
   },
 
   user: {
@@ -64,7 +165,94 @@ export const auth = betterAuth({
         type: ["admin", "teacher", "student"],
         required: false,
         defaultValue: "student",
-        input: false, // client theke role pathano jabe na
+        input: false, // cannot be passed from client
+      },
+      phone: {
+        type: "string",
+        required: false,
+      },
+      location: {
+        type: "string",
+        required: false,
+      },
+      department: {
+        type: "string",
+        required: false,
+      },
+      bio: {
+        type: "string",
+        required: false,
+      },
+      fatherName: {
+        type: "string",
+        required: false,
+      },
+      motherName: {
+        type: "string",
+        required: false,
+      },
+      dateOfBirth: {
+        type: "string",
+        required: false,
+      },
+      address: {
+        type: "string",
+        required: false,
+      },
+      bloodGroup: {
+        type: "string",
+        required: false,
+      },
+      gender: {
+        type: "string",
+        required: false,
+      },
+      guardianPhone: {
+        type: "string",
+        required: false,
+      },
+      guardianRelation: {
+        type: "string",
+        required: false,
+      },
+      schoolName: {
+        type: "string",
+        required: false,
+      },
+      studentClass: {
+        type: "string",
+        required: false,
+      },
+      studentSection: {
+        type: "string",
+        required: false,
+      },
+      sessionYear: {
+        type: "string",
+        required: false,
+      },
+      group: {
+        type: "string",
+        required: false,
+      },
+      roll: {
+        type: "string",
+        required: false,
+      },
+      qualification: {
+        type: "string",
+        required: false,
+      },
+      // NOTE: better-auth's internal field-transform step only keeps
+      // fields declared here — anything else in a databaseHooks return
+      // value gets silently dropped before it ever reaches Prisma. This
+      // MUST be declared for the isApproved:false override (see
+      // databaseHooks.user.create.before below) to actually persist.
+      isApproved: {
+        type: "boolean",
+        required: false,
+        defaultValue: false, // cannot be set from client — only changed via admin approve endpoint
+        input: false,
       },
     },
   },
@@ -82,7 +270,7 @@ export const auth = betterAuth({
           } else if (email.endsWith("@edunexus.tchr.com")) {
             role = "teacher";
           } else {
-            // Institution email na hole registration reject
+            // Reject registration if not an institution email
             throw new APIError("BAD_REQUEST", {
               message:
                 "Not an institution email. Use your @edunexus.std.com or @edunexus.tchr.com address to register.",
@@ -90,10 +278,108 @@ export const auth = betterAuth({
             });
           }
 
+          let assignedRollNumber: string | undefined = undefined;
+
+          if (role === "student") {
+            const rawClass = (user as any).studentClass?.trim();
+            const rawSection = (user as any).studentSection?.trim();
+            const rawGroup = (user as any).group?.trim();
+
+            if (rawClass && rawSection) {
+              const cleanGrade = rawClass
+                .replace(/(Class|Grade)\s*/i, "")
+                .trim();
+              const classCriteria = [
+                rawClass,
+                `Class ${cleanGrade}`,
+                `Grade ${cleanGrade}`,
+                cleanGrade,
+              ];
+
+              const cleanSection = rawSection.replace(/Section\s*/i, "").trim();
+              const sectionCriteria = [
+                rawSection,
+                `Section ${cleanSection}`,
+                cleanSection,
+              ];
+
+              const groupFilter = rawGroup ? { group: rawGroup } : {};
+              const classWhere = {
+                role: { in: ["student", "STUDENT"] },
+                studentClass: { in: classCriteria },
+                ...groupFilter,
+              };
+              const sectionWhere = {
+                ...classWhere,
+                studentSection: { in: sectionCriteria },
+              };
+
+              // Section capacity check (Max 30 students per section)
+              const sectionCount = await prisma.user.count({
+                where: sectionWhere,
+              });
+              if (sectionCount >= 30) {
+                throw new APIError("BAD_REQUEST", {
+                  message: `${rawSection} of ${rawClass}${rawGroup ? ` (${rawGroup})` : ""} has reached maximum capacity (30 students). Please select another section.`,
+                  code: "SECTION_FULL",
+                });
+              }
+
+              // Class capacity check (Max 60 students per class / group)
+              const classCount = await prisma.user.count({ where: classWhere });
+              if (classCount >= 60) {
+                throw new APIError("BAD_REQUEST", {
+                  message: `${rawClass}${rawGroup ? ` (${rawGroup})` : ""} has reached maximum capacity (60 students).`,
+                  code: "CLASS_FULL",
+                });
+              }
+
+              // Auto-calculate next sequential roll number
+              const existingStudents = await prisma.user.findMany({
+                where: sectionWhere,
+                select: { roll: true },
+              });
+
+              let maxRoll = 0;
+              for (const s of existingStudents) {
+                if (s.roll) {
+                  const num = parseInt(s.roll.replace(/\D/g, ""), 10);
+                  if (!isNaN(num) && num > maxRoll) {
+                    maxRoll = num;
+                  }
+                }
+              }
+
+              assignedRollNumber = (maxRoll + 1).toString();
+            }
+          }
+
+          const rawDob = (user as any).dateOfBirth;
+          const rawSessionYear =
+            (user as any).sessionYear || new Date().getFullYear().toString();
+          const isDemo = isDemoEmail(email);
+
+          let dobDate: Date | undefined = undefined;
+          if (rawDob) {
+            const parsed = new Date(rawDob);
+            if (!isNaN(parsed.getTime())) {
+              dobDate = parsed;
+            }
+          }
+
           return {
             data: {
               ...user,
               role,
+              ...(role === "student" ? { sessionYear: rawSessionYear } : {}),
+              ...(assignedRollNumber ? { roll: assignedRollNumber } : {}),
+              // Any new self-registration starts in pending approval state (except demo users or admin created users)
+              isApproved: isDemo
+                ? true
+                : typeof (user as any).isApproved === "boolean"
+                  ? (user as any).isApproved
+                  : false,
+              ...(dobDate ? { dateOfBirth: dobDate } : {}),
             },
           };
         },
@@ -107,44 +393,76 @@ export const auth = betterAuth({
   },
 
   hooks: {
-    // Sign-in shuru howar age check kori account lock kina.
+    // Check if account is locked before initiating sign-in.
     before: createAuthMiddleware(async (ctx) => {
       if (ctx.path !== "/sign-in/email") return;
 
-      const email = (ctx.body?.email as string | undefined)?.toLowerCase().trim();
+      let email = (ctx.body?.email as string | undefined)?.toLowerCase().trim();
+
+      if (!email && ctx.request) {
+        try {
+          const cloned = (await ctx.request.clone().json()) as Record<
+            string,
+            any
+          > | null;
+          email = cloned?.email?.toString().toLowerCase().trim();
+        } catch {}
+      }
+
       if (!email) return;
 
+      if (isDemoEmail(email)) {
+        if (!demoAccountsEnabled) {
+          throw new APIError("FORBIDDEN", {
+            message: "Demo accounts are unavailable.",
+            code: "DEMO_ACCOUNTS_DISABLED",
+          });
+        }
+        await handleDemoUserSignIn(email);
+        return; // Demo accounts bypass pending approval & lockout checks
+      }
+
       const user = await prisma.user.findUnique({
-        where: {email},
-        select: {lockedUntil: true},
+        where: { email },
+        select: { lockedUntil: true, isApproved: true },
       });
+
+      if (user && !user.isApproved) {
+        throw new APIError("FORBIDDEN", {
+          message:
+            "Your account is pending admin approval. Please try again after an admin approves your account.",
+          code: "ACCOUNT_PENDING_APPROVAL",
+        });
+      }
 
       if (user?.lockedUntil && user.lockedUntil.getTime() > Date.now()) {
         throw new APIError("FORBIDDEN", {
-          message: `Onek bar bhul password deyar karone apnar account temporarily lock kora hoyeche. Doya kore ${formatRemainingLockTime(
+          message: `Your account has been temporarily locked due to multiple incorrect password attempts. Please try again in ${formatRemainingLockTime(
             user.lockedUntil,
-          )} por abar try korun.`,
+          )}.`,
           code: "ACCOUNT_LOCKED",
-          // Frontend eta diye countdown dekhabe (ISO timestamp).
+          // Used by frontend to display countdown (ISO timestamp).
           lockedUntil: user.lockedUntil.toISOString(),
         });
       }
     }),
 
-    // Sign-in process shesh howar por result dekhe decide kori attempt
-    // count barabo naki reset korbo.
+    // After sign-in process completes, decide whether to increment
+    // attempt count or reset based on result.
     after: createAuthMiddleware(async (ctx) => {
       if (ctx.path !== "/sign-in/email") return;
 
-      const email = (ctx.body?.email as string | undefined)?.toLowerCase().trim();
+      const email = (ctx.body?.email as string | undefined)
+        ?.toLowerCase()
+        .trim();
       if (!email) return;
 
       const returned = ctx.context.returned;
       const signInFailed = returned instanceof APIError;
 
       const user = await prisma.user.findUnique({
-        where: {email},
-        select: {failedLoginAttempts: true, lockedUntil: true},
+        where: { email },
+        select: { failedLoginAttempts: true, lockedUntil: true },
       });
       if (!user) return;
 
@@ -154,31 +472,30 @@ export const auth = betterAuth({
         if (attempts >= MAX_FAILED_LOGIN_ATTEMPTS) {
           const lockedUntil = new Date(Date.now() + LOCKOUT_DURATION_MS);
           await prisma.user.update({
-            where: {email},
-            data: {failedLoginAttempts: 0, lockedUntil},
+            where: { email },
+            data: { failedLoginAttempts: 0, lockedUntil },
           });
 
-          // Just-now-locked hoyeche — eibar-i "wrong password" er bodole
-          // "account locked" message + lockedUntil pathai, jate frontend
-          // shathe shathe countdown shuru korte pare.
+          // Account just got locked — send "account locked" message + lockedUntil
+          // instead of "wrong password" so frontend can start countdown immediately.
           throw new APIError("FORBIDDEN", {
-            message: `Apni ${MAX_FAILED_LOGIN_ATTEMPTS} bar bhul password diyechen. Nirapottar jonno apnar account ${formatRemainingLockTime(
+            message: `You have entered an incorrect password ${MAX_FAILED_LOGIN_ATTEMPTS} times. For security reasons, your account has been locked for ${formatRemainingLockTime(
               lockedUntil,
-            )} er jonno lock kora holo.`,
+            )}.`,
             code: "ACCOUNT_LOCKED",
             lockedUntil: lockedUntil.toISOString(),
           });
         }
 
         await prisma.user.update({
-          where: {email},
-          data: {failedLoginAttempts: attempts},
+          where: { email },
+          data: { failedLoginAttempts: attempts },
         });
       } else if (user.failedLoginAttempts > 0 || user.lockedUntil) {
-        // Successful login — purono kono bhul attempt / lock thakle clear kore dei.
+        // Successful login — clear any previous failed attempts or lockout.
         await prisma.user.update({
-          where: {email},
-          data: {failedLoginAttempts: 0, lockedUntil: null},
+          where: { email },
+          data: { failedLoginAttempts: 0, lockedUntil: null },
         });
       }
     }),

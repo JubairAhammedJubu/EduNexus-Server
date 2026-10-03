@@ -6,9 +6,26 @@ import userRoutes from "./routes/user.routes.js";
 import noticeRoutes from "./routes/notice.routes.js";
 import requestRoutes from "./routes/request.routes.js";
 import assignmentRoutes from "./routes/assignment.routes.js";
-import {prisma} from "./lib/prisma.js";
+import passwordResetRoutes from "./routes/password-reset.routes.js";
+import approvalRoutes from "./routes/approval.routes.js";
+import examRoutes from "./routes/exam.routes.js";
+import resultRoutes from "./routes/result.routes.js";
+import adminRoutes from "./routes/admin.routes.js";
+import adminClassRoutes from "./routes/admin.class.routes.js"
+import adminSubjectRoutes from "./routes/admin.subject.routes.js"
+import adminAcademicRoutes from './routes/admin.academic.routes.js';
+import SubjectRequestsRoutes from "./routes/subject.request.routes.js"
+import adminPeriodRoutes from './routes/admin.periods.routes.js';
+import adminRoutineRoutes from "./routes/admin.routine.routes.js";
+import attendanceRoutes from "./routes/attendance.routes.js";
+import feeRoutes from "./routes/fee.routes.js";
+import atRiskRoutes from "./routes/at-risk.routes.js";
+import performanceRoutes from "./routes/performance.routes.js";
+import eventRoutes from "./routes/event.routes.js";
+import { prisma } from "./lib/prisma.js";
 
 const app = express();
+
 
 // Required behind Cloud Reverse Proxies (Render, Railway, Fly.io, Vercel)
 app.set("trust proxy", 1);
@@ -16,28 +33,75 @@ app.set("trust proxy", 1);
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:5000",
-  ...(process.env.CLIENT_ORIGIN ? process.env.CLIENT_ORIGIN.split(",").map((origin) => origin.trim()) : []),
+  ...(process.env.CLIENT_ORIGIN
+    ? process.env.CLIENT_ORIGIN.split(",").map((o) => o.trim())
+    : []),
 ].filter(Boolean);
 
-app.use(
-  cors({ origin: allowedOrigins, credentials: true })
+function isAllowedOrigin(origin: string) {
+  return allowedOrigins.includes(origin);
+}
 
+const corsMiddleware = cors({
+  origin: (origin, callback) => {
+    if (!origin || isAllowedOrigin(origin)) return callback(null, true);
+    return callback(null, false); // Error pass korle 500 hoy, false dile shudhu CORS header thake na
+  },
+  credentials: true,
+});
+
+// SSLCommerz callback gulo browser redirect / server IPN, CORS lagbe na
+const sslCallback = /^\/api\/student\/fees\/ssl\/(success|fail|cancel|ipn)$/;
+app.use((req, res, next) =>
+  sslCallback.test(req.path) ? next() : corsMiddleware(req, res, next),
 );
+
+const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+app.use((req, res, next) => {
+  if (sslCallback.test(req.path) || !unsafeMethods.has(req.method)) {
+    return next();
+  }
+
+  const origin = req.get("origin");
+  if (origin && !isAllowedOrigin(origin)) {
+    return res.status(403).json({ error: "Untrusted request origin" });
+  }
+
+  return next();
+});
 
 // Better Auth reads the raw request body itself, so its routes must be
 // mounted BEFORE express.json() global middleware runs on them.
 app.use("/api/auth", authRoutes);
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", userRoutes);
 app.use("/api", noticeRoutes);
 app.use("/api", requestRoutes);
 app.use("/api", assignmentRoutes);
+app.use("/api", resultRoutes);
+app.use("/api", passwordResetRoutes);
+app.use("/api", approvalRoutes);
+app.use("/api", examRoutes);
+app.use("/api", adminRoutes);
+app.use("/api", attendanceRoutes);
+app.use("/api", feeRoutes);
+app.use("/api", atRiskRoutes);
+app.use("/api", performanceRoutes);
+app.use("/api", SubjectRequestsRoutes)
+app.use("/api", adminClassRoutes);
+app.use("/api", adminSubjectRoutes);
+app.use("/api", adminAcademicRoutes);
+app.use("/api", adminRoutineRoutes);
+app.use("/api", adminPeriodRoutes);
+app.use("/api", eventRoutes);
+
 
 app.get("/health", async (_req, res) => {
   try {
     await prisma.$connect();
-    res.json({status: "ok", database: "connected"});
+    res.json({ status: "ok", database: "connected" });
   } catch (error: any) {
     res
       .status(500)
