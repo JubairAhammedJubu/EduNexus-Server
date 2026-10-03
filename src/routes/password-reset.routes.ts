@@ -9,22 +9,17 @@ const router = Router();
 // Better Auth encrypts every stored TOTP secret with this same key (see
 // `secret`/`secretConfig` in src/lib/auth.ts — since we don't configure a
 // `secrets` rotation array there, secretConfig is just this string).
-const AUTH_SECRET =
-  process.env.BETTER_AUTH_SECRET || "better-auth-secret-12345678901234567890";
+const AUTH_SECRET = process.env.BETTER_AUTH_SECRET;
 
 // ── "Forgot password" via authenticator app ─────────────────────────
 // No email/OTP is sent — user provides their email + their authenticator app
 // 6-digit code (the TOTP secret already used for 2FA login). If valid,
 // a short-lived resetToken is returned, which is then used to set a new password.
-// Tokens are stored in memory (no DB migration needed) — expire in 5 minutes,
-// and are deleted immediately after single use.
-const resetTickets = new Map<string, { email: string; expiresAt: number }>();
+const MAX_RESET_CODE_ATTEMPTS = 5;
+const RESET_LOCK_DURATION_MS = 15 * 60 * 1000;
 
-function cleanupExpiredTickets() {
-  const now = Date.now();
-  for (const [token, ticket] of resetTickets) {
-    if (ticket.expiresAt <= now) resetTickets.delete(token);
-  }
+function hashResetToken(token: string) {
+  return crypto.createHash("sha256").update(token).digest("hex");
 }
 
 /**
@@ -50,11 +45,35 @@ router.post("/password-reset/verify-code", async (req, res) => {
 
     const user = await prisma.user.findUnique({
       where: { email },
-      select: { id: true, twoFactorEnabled: true },
+      select: {
+        id: true,
+        twoFactorEnabled: true,
+        passwordResetFailedAttempts: true,
+        passwordResetLockedUntil: true,
+      },
     });
     if (!user || !user.twoFactorEnabled) {
       return res.status(400).json({ error: genericError });
     }
+
+    if (
+      user.passwordResetLockedUntil &&
+      user.passwordResetLockedUntil.getTime() > Date.now()
+    ) {
+      return res.status(429).json({ error: genericError });
+    }
+
+    if (user.passwordResetLockedUntil) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordResetFailedAttempts: 0,
+          passwordResetLockedUntil: null,
+        },
+      });
+    }
+
+    if (!AUTH_SECRET) throw new Error("BETTER_AUTH_SECRET is not configured");
 
     const twoFactor = await prisma.twoFactor.findFirst({
       where: { userId: user.id },
@@ -73,24 +92,46 @@ router.post("/password-reset/verify-code", async (req, res) => {
     );
 
     if (!isValid) {
-      return res
-        .status(400)
-        .json({ error: "Incorrect authenticator code. Please try again." });
+      const updated = await prisma.user.update({
+        where: { id: user.id },
+        data: { passwordResetFailedAttempts: { increment: 1 } },
+        select: { passwordResetFailedAttempts: true },
+      });
+      if (updated.passwordResetFailedAttempts >= MAX_RESET_CODE_ATTEMPTS) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            passwordResetLockedUntil: new Date(
+              Date.now() + RESET_LOCK_DURATION_MS,
+            ),
+          },
+        });
+      }
+      return res.status(400).json({ error: genericError });
     }
 
-    cleanupExpiredTickets();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordResetFailedAttempts: 0, passwordResetLockedUntil: null },
+    });
+    await prisma.passwordResetTicket.deleteMany({
+      where: { expiresAt: { lte: new Date() } },
+    });
     const resetToken = crypto.randomBytes(32).toString("hex");
-    resetTickets.set(resetToken, {
-      email,
-      expiresAt: Date.now() + 5 * 60 * 1000,
+    await prisma.passwordResetTicket.create({
+      data: {
+        tokenHash: hashResetToken(resetToken),
+        email,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+      },
     });
 
     return res.json({ success: true, resetToken });
   } catch (error: any) {
     console.error("Error verifying password-reset code:", error);
-    return res
-      .status(500)
-      .json({ error: error?.message || "Something went wrong. Please try again." });
+    return res.status(500).json({
+      error: error?.message || "Something went wrong. Please try again.",
+    });
   }
 });
 
@@ -114,14 +155,27 @@ router.post("/password-reset/set-password", async (req, res) => {
         .json({ error: "Password must be at least 8 characters." });
     }
 
-    cleanupExpiredTickets();
-    const ticket = resetTickets.get(resetToken);
-    if (!ticket) {
+    const tokenHash = hashResetToken(resetToken);
+    const ticket = await prisma.passwordResetTicket.findUnique({
+      where: { tokenHash },
+    });
+    if (!ticket || ticket.expiresAt.getTime() <= Date.now()) {
+      if (ticket) {
+        await prisma.passwordResetTicket.deleteMany({ where: { tokenHash } });
+      }
       return res
         .status(400)
         .json({ error: "This reset session has expired. Please start over." });
     }
-    resetTickets.delete(resetToken); // single-use
+
+    const claimed = await prisma.passwordResetTicket.deleteMany({
+      where: { tokenHash, expiresAt: { gt: new Date() } },
+    });
+    if (claimed.count !== 1) {
+      return res
+        .status(400)
+        .json({ error: "This reset session has expired. Please start over." });
+    }
 
     const user = await prisma.user.findUnique({
       where: { email: ticket.email },
@@ -152,12 +206,17 @@ router.post("/password-reset/set-password", async (req, res) => {
       });
     }
 
-    return res.json({ success: true, message: "Password updated successfully." });
+    await prisma.session.deleteMany({ where: { userId: user.id } });
+
+    return res.json({
+      success: true,
+      message: "Password updated successfully.",
+    });
   } catch (error: any) {
     console.error("Error setting new password:", error);
-    return res
-      .status(500)
-      .json({ error: error?.message || "Something went wrong. Please try again." });
+    return res.status(500).json({
+      error: error?.message || "Something went wrong. Please try again.",
+    });
   }
 });
 

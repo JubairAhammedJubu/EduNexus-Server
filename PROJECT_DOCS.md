@@ -167,6 +167,7 @@ EduNexus-Server/
 | `BETTER_AUTH_URL` | **Yes** | Public base URL of this server | `http://localhost:5000` or `https://api.edunexus.com` |
 | `CLIENT_ORIGIN` | **Yes** | Allowed frontend origins (comma-separated for multiple) | `http://localhost:3000,http://localhost:5000` |
 | `NODE_ENV` | No | Node execution environment | `development` or `production` |
+| `ENABLE_DEMO_ACCOUNTS` | No | Demo sign-in/provisioning; defaults to enabled, set to `false` to disable | `true` or `false` |
 | `R2_ACCOUNT_ID` | **Yes** | Cloudflare account ID | `a1b2c3d4e5f6g7h8...` |
 | `R2_ACCESS_KEY_ID` | **Yes** | Cloudflare R2 S3 access key ID | `0123456789abcdef...` |
 | `R2_SECRET_ACCESS_KEY` | **Yes** | Cloudflare R2 S3 secret access key | `9876543210fedcba...` |
@@ -294,6 +295,7 @@ Special demo accounts are pre-configured:
 - `demostudent@edunexus.std.com` (Password: `demostudent1234`)
 - `demoteacher@edunexus.tchr.com` (Password: `demoteacher1234`)
 Whenever either demo account signs in, the server automatically verifies its existence, ensures `isApproved: true`, removes any lockouts, and disables 2FA challenges.
+Demo accounts are enabled in production by default during development. Set `ENABLE_DEMO_ACCOUNTS=false` in the deployment environment to disable demo sign-in and provisioning later.
 
 ---
 

@@ -376,7 +376,7 @@ router.get(
   requireAuth,
   requireRole("student"),
   async (req, res) => {
-    console.log("GET /student/results HIT");
+
     try {
       const studentEmail = req.user!.email.toLowerCase();
       const { exam, assignmentId } = req.query;

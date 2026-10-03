@@ -32,6 +32,8 @@ model User {
   // ── Login lockout tracking (3 incorrect passwords lock account for 5 hours) ──
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
+  passwordResetFailedAttempts Int @default(0)
+  passwordResetLockedUntil    DateTime?
 
   // ── Two-factor authentication (authenticator app) ──
   twoFactorEnabled Boolean @default(false)
@@ -93,6 +95,34 @@ model Notice {
   updatedAt   DateTime @updatedAt
 
   @@map("notices")
+}
+
+model Event {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  title       String
+  category    String   @default("Academic")
+  startDate   String
+  endDate     String
+  location    String
+  audience    String   @default("All")
+  description String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([startDate])
+  @@index([category])
+  @@map("events")
+}
+
+model PasswordResetTicket {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  tokenHash String   @unique
+  email     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("password_reset_tickets")
 }
 
 model Session {
@@ -593,4 +623,14 @@ model FeePayment {
   @@index([gatewayStatus])
   @@index([sessionYear, studentClass])
   @@map("fee_payments")
+}
+
+model FeePaymentClaim {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("fee_payment_claims")
 }
