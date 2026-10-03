@@ -97,6 +97,19 @@ app.use("/api", adminRoutineRoutes);
 app.use("/api", adminPeriodRoutes);
 app.use("/api", eventRoutes);
 
+// Global Error Handler Middleware
+app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("❌ Express Server Error:", err?.message || err);
+  if (res.headersSent) return;
+  res.status(err.status || err.statusCode || 500).json({
+    error: err.message || "Internal Server Error",
+    code: err.code || "INTERNAL_SERVER_ERROR",
+  });
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("⚠️ Unhandled Promise Rejection caught:", reason);
+});
 
 app.get("/health", async (_req, res) => {
   try {
